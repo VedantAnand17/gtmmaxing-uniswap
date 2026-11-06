@@ -14,6 +14,10 @@ Everything below comes from real requests made during the build.
 - **TJAR's documentation names its sharp edges.**
   The full-balance release, the nonce guarantee and the warning that a rotated-out releaser still answers its view calls each shaped our keeper directly.
 
+- **The quotes held up with real money.**
+  0.001 ETH on Arbitrum was quoted at $2.20 USDC on Base and delivered $2.21, as a `BRIDGE` step followed by a `CLASSIC` step in one plan.
+  Our keeper's jar clearing quoted a guaranteed $2.04 for the released ETH, and the swap delivered $2.09.
+
 ## What cost us time
 
 ### 1. Chained routes need a header the integration guide does not mention
@@ -32,9 +36,11 @@ Our fake API in tests could not catch this; only reading a real plan response di
 
 ### 3. No way to tie a bridge delivery back to a payment
 
+A plan ending in a swap is fine: on our live payment, the last step's proof named the destination transaction on Base, so we credited from it directly.
 For a plan ending in a bridge, we know the source transaction but not the destination one.
 `GetSwapsResponse.fillTxHash` is marked internal and is absent for Across, which carries `swapId` instead.
 A merchant receiving several payments therefore has to match deliveries by amount and time.
+That also means searching logs, which is the call a free RPC endpoint rate-limited during our first live payment.
 **Suggestion:** expose the destination transaction hash on a completed bridge step or plan.
 A memo or reference field carried through to the delivery would solve it completely.
 
@@ -52,7 +58,7 @@ We did not test a bridge approval without it, but the public spec gives no other
 ### 6. TJAR has no testnet deployment
 
 The Trading API supports Base Sepolia, while the TJAR deployment list has mainnets only.
-Our keeper's first real run therefore has to use mainnet funds.
+Our keeper's first real run therefore had to use mainnet funds.
 
 ### 7. Finding a jar's assets as documented needs a paid RPC
 

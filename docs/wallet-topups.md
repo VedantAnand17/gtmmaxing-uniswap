@@ -37,6 +37,7 @@ Three rules close that:
 2. Only allowlisted tokens are accepted, since a jar deposit is priced rather than swapped, and a thin pool could lie.
 3. Deposits are capped, and credit is the lower of the original quote and the current guaranteed output, less a 5% haircut that pays the clearer.
 
+One payment can't fill the jar, because a jar payment has to stay under the threshold and clearing needs value above it, so a round takes at least two payments.
 Each cleared round pays the treasury at least what it credited, so the exposure is one threshold's worth of value if the jar's tokens collapse before anyone clears them.
 Keep the threshold small and use `setConfig` to tune it, remembering that lowering it can leak value already in the jar.
 
