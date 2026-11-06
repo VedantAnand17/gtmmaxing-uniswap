@@ -3,6 +3,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from "@tanstack/react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockSignIn } from "../../lib/mockSession";
+import { mockTopups } from "../../lib/mockTopups";
+import { TopupRequestError } from "./topupClient";
 import { TopupPage } from "./TopupPage";
 import { parseAmount } from "./wallet";
 
@@ -70,6 +72,35 @@ describe("Add credits page", () => {
     expect(await screen.findByRole("heading", { name: "333 credits added" })).toBeTruthy();
     expect(screen.getByText(/repeat its request now/)).toBeTruthy();
     await waitFor(() => expect(calls.some((call) => call.method === "eth_sendTransaction")).toBe(true));
+  });
+
+  it("never pays twice: if the server can't be reached after the wallet sent, it only checks again", async () => {
+    mockSignIn();
+    const calls = fakeWallet();
+    const next = vi.spyOn(mockTopups, "next").mockRejectedValueOnce(new TopupRequestError("network_error"));
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Connect wallet" }));
+    fireEvent.change(await screen.findByLabelText(/^Amount/), { target: { value: "0.002" } });
+    fireEvent.click(screen.getByRole("button", { name: "Get a quote" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Pay" }));
+    expect(await screen.findByText(/We couldn't confirm it just now/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Pay" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    expect(await screen.findByRole("heading", { name: "333 credits added" })).toBeTruthy();
+    const proof = { tx_hash: `0x${"12".repeat(32)}` };
+    expect(next.mock.calls.map((call) => call[1])).toEqual([proof, proof]);
+    expect(calls.filter((call) => call.method === "eth_sendTransaction")).toHaveLength(1);
+    next.mockRestore();
+  });
+
+  it("after a reload mid-payment, carries on from the saved proof without touching the wallet", async () => {
+    mockSignIn();
+    const calls = fakeWallet();
+    window.localStorage.setItem("gtm-topup-in-flight", JSON.stringify({ id: "tp_mock", proof: { tx_hash: `0x${"12".repeat(32)}` } }));
+    mount();
+    expect(await screen.findByRole("heading", { name: "333 credits added" })).toBeTruthy();
+    expect(calls.filter((call) => call.method === "eth_sendTransaction")).toHaveLength(0);
+    expect(window.localStorage.getItem("gtm-topup-in-flight")).toBeNull();
   });
 
   it("reports a declined wallet request without moving on", async () => {

@@ -1,7 +1,7 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
-import { BASE_CHAIN_ID, type TopupOptions, type TopupRail, type TopupView } from "@found/contracts";
+import { BASE_CHAIN_ID, type TopupOptions, type TopupProof, type TopupRail, type TopupView } from "@found/contracts";
 import { api } from "../../lib/apiClient";
 import { leavePage } from "../../lib/navigation";
 import type { Session } from "../../lib/session";
@@ -12,6 +12,30 @@ import { WalletError, authorizeWallet, connectWallet, parseAmount, performAction
 const OTHER = "other";
 const WAIT_MS = 4000;
 const SIGNATURE_REUSE_MS = 50 * 60_000;
+const IN_FLIGHT_KEY = "gtm-topup-in-flight";
+
+/**
+ * The top-up whose wallet step has happened and the proof the server may not
+ * have received. Kept across errors and reloads, so that recovering means
+ * re-reporting this proof and never asking the wallet to pay again.
+ */
+interface InFlight {
+  id: string;
+  proof: TopupProof;
+}
+function readInFlight(): InFlight | null {
+  try {
+    return JSON.parse(window.localStorage.getItem(IN_FLIGHT_KEY) ?? "null") as InFlight | null;
+  } catch {
+    return null;
+  }
+}
+function writeInFlight(value: InFlight | null) {
+  try {
+    if (value) window.localStorage.setItem(IN_FLIGHT_KEY, JSON.stringify(value));
+    else window.localStorage.removeItem(IN_FLIGHT_KEY);
+  } catch { /* Without storage, a reload just loses the resume prompt. */ }
+}
 
 const ERRORS: Record<string, string> = {
   amount_too_small: "That's under the $1 minimum. Try a larger amount.",
@@ -102,6 +126,8 @@ function TopupForm({ options, session, shortfall }: { options: TopupOptions; ses
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const signature = useRef<{ wallet: string; signature: string; issued_at: number } | null>(null);
+  /** Set once a payment step has reached the wallet: from then on the only way forward is to check on it. */
+  const [resuming, setResuming] = useState<InFlight | null>(() => readInFlight());
 
   const listed = chain?.tokens.find((token) => token.address === tokenChoice);
   const jar = options.jar;
@@ -136,10 +162,12 @@ function TopupForm({ options, session, shortfall }: { options: TopupOptions; ses
 
   /** Follows the server's actions until the payment is credited or stops. */
   const pay = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (start: InFlight | null) => {
       setError(null);
-      let current = topup!;
+      let pending = start;
+      let current = pending ? await api.topups.next(pending.id, pending.proof) : topup!;
       for (;;) {
+        setTopup(current);
         const action = current.action;
         if (current.status !== "open" || action.kind === "none") return current;
         setProgress(action.label);
@@ -147,20 +175,37 @@ function TopupForm({ options, session, shortfall }: { options: TopupOptions; ses
           await new Promise((resolve) => setTimeout(resolve, WAIT_MS));
           current = await api.topups.next(current.id, {});
         } else {
-          current = await api.topups.next(current.id, await performAction(wallet!, action));
+          pending = { id: current.id, proof: await performAction(wallet ?? await connectWallet(), action) };
+          writeInFlight(pending);
+          setResuming(pending);
+          current = await api.topups.next(pending.id, pending.proof);
         }
-        setTopup(current);
       }
     },
     onSuccess: (done) => {
       setProgress(null);
+      writeInFlight(null);
+      setResuming(null);
       if (done.status === "credited") void queryClient.invalidateQueries();
     },
     onError: (failure) => {
       setProgress(null);
       setError(errorText(codeOf(failure)));
+      // A record from another account can never finish here, so it must not block this page.
+      if (codeOf(failure) === "not_found") {
+        writeInFlight(null);
+        setResuming(null);
+      }
     },
   });
+
+  // A payment left unfinished by a reload or a closed tab carries on by itself; nothing is sent again.
+  const { mutate: payMutate } = pay;
+  const leftOver = useRef(resuming);
+  useEffect(() => {
+    if (leftOver.current) payMutate(leftOver.current);
+    leftOver.current = null;
+  }, [payMutate]);
 
   if (topup?.status === "credited") {
     return (
@@ -174,7 +219,25 @@ function TopupForm({ options, session, shortfall }: { options: TopupOptions; ses
   }
 
   const stopped = topup && topup.status !== "open";
-  const reset = () => { setTopup(null); setError(null); };
+  const reset = () => { setTopup(null); setError(null); writeInFlight(null); setResuming(null); };
+
+  if (resuming && !stopped) {
+    return (
+      <Panel title="Finishing your payment">
+        <p role="status">Your wallet has sent this payment. Credits arrive once the USDC reaches us; you don't need to pay again.</p>
+        {progress && <p role="status" className="approval-notice">{progress}…</p>}
+        {pay.isError && (
+          <>
+            <p role="alert" className="agent-error">We couldn't confirm it just now. Nothing was sent again.</p>
+            <div className="connect-actions">
+              <button type="button" className="workspace-button" onClick={() => pay.mutate(resuming)}>Check again</button>
+            </div>
+          </>
+        )}
+        <p className="connect-account">Signed in as {session.user.email}.</p>
+      </Panel>
+    );
+  }
 
   return (
     <Panel title="Add credits">
@@ -241,7 +304,7 @@ function TopupForm({ options, session, shortfall }: { options: TopupOptions; ses
           {progress && <p role="status" className="approval-notice">{progress}…</p>}
           <div className="connect-actions">
             <button type="button" className="workspace-button workspace-button-secondary" disabled={pay.isPending} onClick={reset}>Change</button>
-            <button type="button" className="workspace-button" disabled={pay.isPending} onClick={() => pay.mutate()}>{pay.isPending ? "Paying…" : "Pay"}</button>
+            <button type="button" className="workspace-button" disabled={pay.isPending} onClick={() => pay.mutate(null)}>{pay.isPending ? "Paying…" : "Pay"}</button>
           </div>
         </>
       )}

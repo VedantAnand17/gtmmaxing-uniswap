@@ -33,6 +33,8 @@ export interface UniswapPlanStep {
   method: string;
   payloadType?: string;
   status: string;
+  stepType?: string;
+  proof?: { txHash?: string; signature?: string };
   tokenInChainId?: number;
   payload?: Record<string, unknown>;
 }

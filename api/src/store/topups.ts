@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, inArray, or, sql, sum } from "drizzle-orm";
+import { and, eq, gt, inArray, or, sql, sum } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { cryptoTopups } from "../db/schema.js";
 
@@ -75,9 +75,5 @@ export class TopupStore {
     const row = await this.db.select({ count: sql<number>`count(*)` }).from(cryptoTopups)
       .where(and(eq(cryptoTopups.userId, userId), gt(cryptoTopups.createdAt, since))).get();
     return Number(row?.count ?? 0);
-  }
-
-  async latest(userId: string, limit: number): Promise<TopupRow[]> {
-    return this.db.select().from(cryptoTopups).where(eq(cryptoTopups.userId, userId)).orderBy(desc(cryptoTopups.createdAt)).limit(limit).all();
   }
 }

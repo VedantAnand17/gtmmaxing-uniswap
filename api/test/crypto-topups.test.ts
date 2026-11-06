@@ -6,7 +6,7 @@ import { CREDIT_ATOMIC } from "../src/domain/credits.js";
 import { walletTypedData } from "../src/application/topups/index.js";
 import { TOPUP_CHAINS } from "../src/application/topups/catalog.js";
 import { DEFAULT_RPC_URLS, type ChainReader, type ChainTx, type UsdcDelivery } from "../src/payments/chain-reader.js";
-import type { UniswapApi, UniswapPlan, UniswapQuoteInput } from "../src/payments/uniswap.js";
+import { UniswapError, type UniswapApi, type UniswapPlan, type UniswapQuoteInput } from "../src/payments/uniswap.js";
 import { createTestDb, SESSION_SECRET, signIn } from "./helpers.js";
 
 const TREASURY = "0x00000000000000000000000000000000000000aa";
@@ -214,6 +214,63 @@ describe("wallet top-ups", () => {
     s.uniswap.plan = planned("COMPLETED", "COMPLETE");
     s.chains.deliveries = [{ txHash: hash(2), logIndex: 1, value: 9_850_000n }];
     expect((await next(s, id)).body.topup).toMatchObject({ status: "credited", credits: 656 });
+  });
+
+  const completedPlan = (lastStep: Partial<UniswapPlan["steps"][number]>): UniswapPlan => ({
+    planId: "plan-1", status: "COMPLETED", recipient: TREASURY, swapper: account.address, currentStepIndex: 1,
+    steps: [
+      { stepIndex: 0, stepType: "BRIDGE", method: "SEND_TX", status: "COMPLETE", tokenInChainId: 42161, proof: { txHash: hash(1) } },
+      { stepIndex: 1, stepType: "CLASSIC", method: "SEND_TX", status: "COMPLETE", tokenInChainId: 8453, proof: { txHash: hash(7) }, ...lastStep },
+    ],
+  });
+
+  it("credits a plan ending in a swap on Base from that exact transaction, without searching logs", async () => {
+    // The shape of the first real payment on 2026-11-06: bridge to Base, then swap to USDC.
+    const s = await setup();
+    s.uniswap.routing = "CHAINED";
+    s.chains.add(hash(7), { transfers: [{ logIndex: 43, token: BASE_USDC.toLowerCase(), from: ROUTER, to: TREASURY, value: 2_210_212n }] });
+    s.chains.usdcDeliveries = async () => { throw new Error("must not search"); };
+    s.uniswap.plan = completedPlan({});
+    expect((await create(s, { chain_id: 42161, token: ARB_ADDRESS })).body.topup).toMatchObject({ status: "credited", credits: 147, settlement_tx: hash(7) });
+  });
+
+  it("a plan ending in a bridge falls back to finding the delivery, since its proof is on the source chain", async () => {
+    const s = await setup();
+    s.uniswap.routing = "CHAINED";
+    s.chains.deliveries = [{ txHash: hash(8), logIndex: 0, value: 9_900_000n }];
+    s.uniswap.plan = completedPlan({ stepType: "BRIDGE", tokenInChainId: 42161 });
+    expect((await create(s, { chain_id: 42161, token: ARB_ADDRESS })).body.topup).toMatchObject({ status: "credited", settlement_tx: hash(8) });
+  });
+
+  it("a rate-limited chain read after payment means keep waiting, never an error or a lost payment", async () => {
+    const s = await setup();
+    s.uniswap.routing = "CHAINED";
+    s.uniswap.plan = completedPlan({ stepType: "BRIDGE", tokenInChainId: 42161 });
+    s.chains.usdcDeliveries = async () => { throw new Error("Rate limit exceeded"); };
+    const created = await create(s, { chain_id: 42161, token: ARB_ADDRESS });
+    expect(created).toMatchObject({ status: 200, body: { topup: { status: "open", action: { kind: "wait" } } } });
+    s.chains.usdcDeliveries = async () => [{ txHash: hash(8), logIndex: 0, value: 9_900_000n }];
+    expect((await next(s, created.body.topup.id)).body.topup.status).toBe("credited");
+  });
+
+  it("a Uniswap failure once a plan is running keeps the payment open", async () => {
+    const s = await setup();
+    s.uniswap.routing = "CHAINED";
+    s.uniswap.plan = { planId: "plan-1", status: "ACTIVE", recipient: TREASURY, swapper: account.address, currentStepIndex: 0, steps: [{ stepIndex: 0, method: "SEND_TX", status: "AWAITING_ACTION", tokenInChainId: 42161, payload: { to: ROUTER, data: "0xstep" } }] };
+    const id = (await create(s, { chain_id: 42161, token: ARB_ADDRESS })).body.topup.id;
+    s.uniswap.getPlan = async () => { throw new UniswapError(400, "BadRequest", "no"); };
+    expect((await next(s, id)).body.topup).toMatchObject({ status: "open", action: { kind: "wait" } });
+  });
+
+  it("a proof sent twice is submitted to Uniswap once, so the page can safely retry", async () => {
+    const s = await setup();
+    s.uniswap.routing = "CHAINED";
+    const step = { stepIndex: 0, method: "SEND_TX", tokenInChainId: 42161, payload: { to: ROUTER, data: "0xstep" } };
+    s.uniswap.plan = { planId: "plan-1", status: "ACTIVE", recipient: TREASURY, swapper: account.address, currentStepIndex: 0, steps: [{ ...step, status: "AWAITING_ACTION" }] };
+    const id = (await create(s, { chain_id: 42161, token: ARB_ADDRESS })).body.topup.id;
+    s.uniswap.plan = { ...s.uniswap.plan, status: "IN_PROGRESS", steps: [{ ...step, status: "IN_PROGRESS", proof: { txHash: hash(1) } }] };
+    await next(s, id, { tx_hash: hash(1) });
+    expect(s.uniswap.patches).toEqual([]);
   });
 
   it("a plan that pays anyone but the treasury is never credited", async () => {

@@ -185,9 +185,15 @@ export class TopupService {
       }
       if (row.phase === "settling") return await this.settle(row, fail, reload);
     } catch (error) {
-      if (error instanceof UniswapError && error.status < 500) {
-        return await fail(error.noRoute ? "no_route" : "uniswap_refused");
+      if (error instanceof TopupError && error.status !== 502) throw error;
+      // Once money may be moving, a failed read says nothing about the payment: keep it open and look again.
+      const latest = await reload();
+      if (latest.planId || latest.phase === "settling") {
+        console.warn({ event: "topup_retry", topup: row.id, message: String((error as Error).message).slice(0, 200) });
+        return this.waiting(latest, "Checking the payment");
       }
+      if (error instanceof UniswapError && error.status < 500) return await fail(error.noRoute ? "no_route" : "uniswap_refused");
+      if (error instanceof UniswapError) throw new TopupError("uniswap_unavailable", 502);
       throw error;
     }
     return { row };
@@ -222,8 +228,10 @@ export class TopupService {
       plan = await this.deps.uniswap.createPlan(quoted.quote);
       await this.deps.store.patch(row.id, { planId: plan.planId });
     } else if (proof.tx_hash || proof.signature) {
-      const stepIndex = (await this.deps.uniswap.getPlan(row.planId)).currentStepIndex ?? 0;
-      plan = await this.deps.uniswap.patchPlan(row.planId, { steps: [{ stepIndex, proof: { ...(proof.tx_hash ? { txHash: proof.tx_hash } : {}), ...(proof.signature ? { signature: proof.signature } : {}) } }] });
+      const known = await this.deps.uniswap.getPlan(row.planId);
+      // A retry after a lost response must not submit the same proof twice.
+      const alreadySent = known.steps.some((step) => (proof.tx_hash && same(step.proof?.txHash, proof.tx_hash)) || (proof.signature && same(step.proof?.signature, proof.signature)));
+      plan = alreadySent ? known : await this.deps.uniswap.patchPlan(row.planId, { steps: [{ stepIndex: known.currentStepIndex ?? 0, proof: { ...(proof.tx_hash ? { txHash: proof.tx_hash } : {}), ...(proof.signature ? { signature: proof.signature } : {}) } }] });
     } else {
       plan = await this.deps.uniswap.getPlan(row.planId);
     }
@@ -244,7 +252,7 @@ export class TopupService {
   }
 
   private async settle(row: TopupRow, fail: Fail, reload: () => Promise<TopupRow>): Promise<Stepped> {
-    if (row.rail === "swap" && row.routing === "CHAINED") return this.deliver(row, reload);
+    if (row.rail === "swap" && row.routing === "CHAINED") return this.settlePlan(row, fail, reload);
     const tx = await this.deps.chains.tx(row.sourceChainId, row.sourceTx!);
     if (!tx) return this.waiting(row, "Waiting for the transaction to confirm");
     if (!tx.success) return fail("payment_reverted");
@@ -266,6 +274,22 @@ export class TopupService {
       return this.creditOr(row, Number(paid.value), BASE_CHAIN_ID, tx.hash, paid.logIndex, fail, reload);
     }
     return this.deliver(row, reload);
+  }
+
+  /**
+   * A plan ending in a swap on Base names the very transaction that paid the
+   * treasury. One ending in a bridge has only its source-chain proof, so the
+   * delivery has to be found.
+   */
+  private async settlePlan(row: TopupRow, fail: Fail, reload: () => Promise<TopupRow>): Promise<Stepped> {
+    const plan = await this.deps.uniswap.getPlan(row.planId!);
+    const last = plan.steps[plan.steps.length - 1];
+    if (!last?.proof?.txHash || last.stepType === "BRIDGE" || last.tokenInChainId !== BASE_CHAIN_ID) return this.deliver(row, reload);
+    const tx = await this.deps.chains.tx(BASE_CHAIN_ID, last.proof.txHash);
+    if (!tx) return this.waiting(row, "Waiting for the funds to arrive on Base");
+    const paid = tx.transfers.find((transfer) => same(transfer.token, BASE_USDC) && same(transfer.to, this.treasury));
+    if (!tx.success || !paid) return fail("payment_mismatch");
+    return this.creditOr(row, Number(paid.value), BASE_CHAIN_ID, tx.hash, paid.logIndex, fail, reload);
   }
 
   private async settleJar(row: TopupRow, tx: ChainTx, fail: Fail, reload: () => Promise<TopupRow>): Promise<Stepped> {
