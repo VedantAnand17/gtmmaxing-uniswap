@@ -31,7 +31,7 @@ The first commit holds the public files as they stood before the hackathon. Each
 | Token Jar deposits, the per-round cap, and choosing the jar or a swap | [`api/src/application/topups/index.ts#L196`](api/src/application/topups/index.ts#L196), [`api/src/application/topups/index.ts#L342`](api/src/application/topups/index.ts#L342), [`api/src/application/topups/index.ts#L175`](api/src/application/topups/index.ts#L175) |
 | Atomic credit grant | [`api/migrations/0028_crypto_topups.sql#L39`](api/migrations/0028_crypto_topups.sql#L39) |
 | Open-source Token Jar keeper | [`packages/tjar-keeper/src/keeper.ts#L68`](packages/tjar-keeper/src/keeper.ts#L68), [`packages/tjar-keeper/src/decide.ts#L34`](packages/tjar-keeper/src/decide.ts#L34) |
-| Agent refusal that says where to buy | [`api/src/application/agent-gateway/index.ts#L211`](api/src/application/agent-gateway/index.ts#L211) |
+| Agent refusal that says where to buy | [`api/src/application/agent-gateway/index.ts#L218`](api/src/application/agent-gateway/index.ts#L218) |
 | Agents buying from their own wallet | [`api/src/routes/agent-gateway.ts#L156`](api/src/routes/agent-gateway.ts#L156), [`agent-buys-credits.mjs`](web/public/developers/agent-buys-credits.mjs) |
 | Pay with crypto on the pricing page | [`web/src/features/outboundmaxing/PricingPlans.tsx#L94`](web/src/features/outboundmaxing/PricingPlans.tsx#L94) |
 | Checkout page | [`web/src/features/topup/TopupPage.tsx`](web/src/features/topup/TopupPage.tsx) |
@@ -65,6 +65,24 @@ Read [`docs/wallet-topups.md`](docs/wallet-topups.md) for the design and [`FEEDB
 **An agent buying its own credits:** an agent paid 0.00048 ETH from its own wallet, using [the example script](web/public/developers/agent-buys-credits.mjs), and received 66 credits on its owner's account.
 
 - [The agent's payment into the jar](https://basescan.org/tx/0x425234406858179c0a7aeea60df90fea8de53813af41975e857873f38c1091d7)
+
+**A live payment on the site:** 0.0005 ETH from Arbitrum became $1.10 USDC on Base and 73 credits, through a bridge and then a swap.
+
+- [Swap step on Base](https://basescan.org/tx/0x7744e6c38c8aafa73ad3cd64524235280c7973a5a295d835eb8e30273b8cb033)
+
+## ENSv2: an agent's public name is its off switch
+
+An owner links an agent to an ENS name, and one text record on that name decides whether the agent may start paid work. Removing the record stops the agent, and setting it again resumes it. On an ENSv2 Permissioned Resolver, Enhanced Access Control lets another account hold only the right to edit this key.
+
+Live on production: `research.gtmmaxing.eth` [points at a production agent](https://etherscan.io/tx/0xa1376d237b54314dcdb2af005adaeb704fba7490db3ee524d15fb948b94812e6), written by a wallet limited to this one key. Stopping and resuming were tested on a local build against real mainnet ENS.
+
+| What | Where |
+| --- | --- |
+| Reading the record through the ENS Universal Resolver | [`api/src/application/agent-ens.ts#L24`](api/src/application/agent-ens.ts#L24) |
+| The guard that decides | [`api/src/application/agent-ens.ts#L61`](api/src/application/agent-ens.ts#L61) |
+| The check before paid work | [`api/src/application/agent-gateway/index.ts#L203`](api/src/application/agent-gateway/index.ts#L203) |
+| Linking a name | [`api/src/routes/agents.ts#L86`](api/src/routes/agents.ts#L86) |
+| Design | [`docs/agent-ens-names.md`](docs/agent-ens-names.md) |
 
 ## License
 

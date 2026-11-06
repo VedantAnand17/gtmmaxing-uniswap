@@ -1,4 +1,5 @@
 import {
+  AGENT_ENS_RECORD_KEY,
   CAPABILITIES,
   MAX_BATCH_PEOPLE,
   OUTCOME_TOOLS,
@@ -23,6 +24,7 @@ import {
   type ToolRequest,
   type ToolRun,
 } from "@found/contracts";
+import type { AgentEnsGuard } from "../agent-ens.js";
 import type { AgentPrincipal } from "../../auth/agent-auth.js";
 import { randomToken } from "../../auth/google.js";
 import type { ProviderMode } from "../../config.js";
@@ -74,6 +76,8 @@ export interface AgentGatewayDeps {
   /** Wallet top-ups are on, so an agent its owner allows can be told where to buy. */
   canTopUp?: boolean;
   runs: AgentRunStore;
+  /** Stops new spending for an agent whose linked ENS name no longer names it. */
+  ens?: Pick<AgentEnsGuard, "status">;
   credits: CreditsService;
   tools: ToolLauncher;
   lookups: {
@@ -196,6 +200,9 @@ export class AgentGateway {
       const existing = await this.runs.find(principal.agent.id, common.idempotencyKey);
       if (existing) return this.replay(principal, existing, requestHash, balance, ctx);
     }
+    const ensStatus = await this.deps.ens?.status(principal.agent);
+    if (ensStatus === "stopped") return refused({ reason: "ens_stopped", summary: `Nothing was sent: this agent was stopped onchain, and ${principal.agent.ensName} must name it again in ${AGENT_ENS_RECORD_KEY} before it can spend.` }, balance);
+    if (ensStatus === "unknown") return refused({ reason: "ens_check_unavailable", summary: `Nothing was sent: this agent spends only while ${principal.agent.ensName} names it, and that record can't be read right now; try again later.` }, balance);
     const quote = await this.uncachedQuote(principal, plan);
     const cacheOnly = quote === 0;
     // 3. Nothing paid runs without the caller's own ceiling.
