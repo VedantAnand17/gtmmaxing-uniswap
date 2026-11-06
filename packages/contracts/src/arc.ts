@@ -9,7 +9,7 @@ import { txHashSchema } from "./topups.js";
 export const ARC_TESTNET = {
   chainId: 5042002,
   name: "Arc Testnet",
-  rpcUrl: "https://rpc.testnet.arc.network",
+  rpcUrl: "https://arc-testnet.drpc.org",
   explorerUrl: "https://explorer.testnet.arc.io",
   faucetUrl: "https://faucet.circle.com",
   usdc: "0x3600000000000000000000000000000000000000",
