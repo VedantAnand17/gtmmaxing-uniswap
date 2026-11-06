@@ -1,8 +1,10 @@
-# GTMMAXING: agentic commerce on Uniswap, ENS and Arc
+# GTMMAXING: OpenRouter for GTM tools, now with agentic commerce on Uniswap, ENS and Arc
 
-[GTMMAXING](https://gtmmaxing.com) gives people and AI agents B2B data: contacts, lead lists and company research, paid for in credits.
-It's a live product that existed before ETHGlobal Mumbai, so this is a Continuity Track entry.
-Buying credits used to mean a card and a monthly plan, and an agent that ran out simply stopped.
+[GTMMAXING](https://gtmmaxing.com) is OpenRouter for GTM tools.
+One account and one credit balance give people and AI agents contact enrichment, lead lists, web research and social listening, from the browser, MCP, a CLI or an API.
+
+GTMMAXING was live before ETHGlobal Mumbai, so this is a Continuity Track entry.
+The gap we closed at the event: an agent that ran out of credits simply stopped until a person found a card, and nobody outside the product could see or stop what an agent was allowed to spend.
 
 - **Uniswap is the checkout.** People buy any plan with almost any token, on the chain it's already on, and we receive USDC on Base. Agents that run out are told where to buy and pay from their own wallets. Small payments collect in a Token Jar.
 - **ENSv2 is the off switch.** An agent's public name holds one record that decides whether it may start paid work, and a limited wallet can flip only that record.
@@ -102,6 +104,8 @@ Live on production: `research.gtmmaxing.eth` [points at a production agent](http
 | Rules, including never granting credits | [`api/src/application/arc-checkout.ts`](api/src/application/arc-checkout.ts) |
 | Reading receipts on Arc | [`api/src/payments/arc.ts`](api/src/payments/arc.ts) |
 | Checkout page | [`web/src/features/arc/ArcPage.tsx`](web/src/features/arc/ArcPage.tsx) |
+| Arc Studio project | [Open in Arc Studio](https://studio.arc.io/share/gtmmaxing-usdc-credit-checkout-2kif6xoiet), [deployed app](https://arc-studio-ca8f39474dfb448abe4cbc25.vercel.app/) |
+| Live test payment | [1 test USDC on the Arc explorer](https://explorer.testnet.arc.io/tx/0xab63a1f729ef7eb3e0f18e4b20722f29859928f80e74b22ef7cc66902386e88a) |
 
 ## License
 
