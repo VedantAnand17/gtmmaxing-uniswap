@@ -1,21 +1,31 @@
-# GTMMAXING: Uniswap as the checkout for people and AI agents
+# GTMMAXING: agentic commerce on Uniswap, ENS and Arc
 
 [GTMMAXING](https://gtmmaxing.com) gives people and AI agents B2B data: contacts, lead lists and company research, paid for in credits.
+It's a live product that existed before ETHGlobal Mumbai, so this is a Continuity Track entry.
 Buying credits used to mean a card and a monthly plan, and an agent that ran out simply stopped.
 
-Now Uniswap is the checkout on both sides of the pricing page:
+- **Uniswap is the checkout.** People buy any plan with almost any token, on the chain it's already on, and we receive USDC on Base. Agents that run out are told where to buy and pay from their own wallets. Small payments collect in a Token Jar.
+- **ENSv2 is the off switch.** An agent's public name holds one record that decides whether it may start paid work, and a limited wallet can flip only that record.
+- **Arc is the simplest payment.** On Arc Testnet, USDC is both the money and the gas, so one transfer is the whole checkout. It's a test path and never grants credits.
 
-- **People** buy any plan with almost any token, on the chain it's already on. We receive USDC on Base.
-- **Agents** that run out are told where to buy, pay from their own wallet once the owner allows it, and repeat the call.
-- **Small payments** go into a Uniswap Token Jar as one plain transfer, and an hourly keeper clears it for USDC when that's profitable.
-
-Try it at [gtmmaxing.com/outboundmaxing](https://gtmmaxing.com/outboundmaxing/#plans), or read the prices as data at [gtmmaxing.com/pricing.json](https://gtmmaxing.com/pricing.json).
+Try it: [pricing page](https://gtmmaxing.com/outboundmaxing/#plans), [Arc test checkout](https://gtmmaxing.com/arc/), [prices as data](https://gtmmaxing.com/pricing.json).
 
 ## What this repository is
 
-This is a curated excerpt of a private production codebase, published for the ETHGlobal Mumbai Uniswap prize.
-It isn't a full application and won't build by itself, because the server wiring, database schema and product code around it stay private.
-The first commit holds the public files as they stood before the hackathon. Each later commit replays a real commit from our private repository, with its original message and timestamp, limited to these files.
+This is the open-source part of a private production codebase: the Uniswap, ENS and Arc work, under the MIT license.
+The rest of the product, including our data suppliers and the server wiring and database schema around this code, stays private, so this repository doesn't build into the full app.
+The first commit holds the public files as they stood before the hackathon. Later commits replay our real commits from the private repository, limited to these files, and commits from the end of the event onward are new here.
+
+## Try it yourself
+
+Dry-run the Token Jar keeper against our live jar. It only reads, and needs a [Uniswap API key](https://developers.uniswap.org):
+
+```bash
+cd packages/tjar-keeper && npm install
+JAR=0x4D7483e6D6FC402e8b128a92581d68a4947f71D0 UNISWAP_API_KEY=your_key node src/cli.ts
+```
+
+An agent can buy credits from its own wallet with [`agent-buys-credits.mjs`](web/public/developers/agent-buys-credits.mjs), once its owner switches that on. The steps are in the [developer guide](https://gtmmaxing.com/developers/buy-credits/).
 
 ## Where Uniswap is used
 
@@ -83,6 +93,15 @@ Live on production: `research.gtmmaxing.eth` [points at a production agent](http
 | The check before paid work | [`api/src/application/agent-gateway/index.ts#L203`](api/src/application/agent-gateway/index.ts#L203) |
 | Linking a name | [`api/src/routes/agents.ts#L86`](api/src/routes/agents.ts#L86) |
 | Design | [`docs/agent-ens-names.md`](docs/agent-ens-names.md) |
+
+## Arc: USDC as money and gas
+
+| What | Where |
+| --- | --- |
+| Design and architecture diagram | [`docs/arc-integration.md`](docs/arc-integration.md) |
+| Rules, including never granting credits | [`api/src/application/arc-checkout.ts`](api/src/application/arc-checkout.ts) |
+| Reading receipts on Arc | [`api/src/payments/arc.ts`](api/src/payments/arc.ts) |
+| Checkout page | [`web/src/features/arc/ArcPage.tsx`](web/src/features/arc/ArcPage.tsx) |
 
 ## License
 
