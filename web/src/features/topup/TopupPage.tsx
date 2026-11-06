@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
 import { BASE_CHAIN_ID, type TopupOptions, type TopupRail, type TopupView } from "@found/contracts";
@@ -7,7 +7,7 @@ import { leavePage } from "../../lib/navigation";
 import type { Session } from "../../lib/session";
 import { useSession } from "../../lib/useSession";
 import { TopupRequestError } from "./topupClient";
-import { WalletError, authorizeWallet, connectWallet, hasWallet, parseAmount, performAction, readToken } from "./wallet";
+import { WalletError, authorizeWallet, connectWallet, parseAmount, performAction, readToken } from "./wallet";
 
 const OTHER = "other";
 const WAIT_MS = 4000;
@@ -111,8 +111,6 @@ function TopupForm({ options, session, shortfall }: { options: TopupOptions; ses
   const tokenReady = custom ? /^0x[0-9a-fA-F]{40}$/.test(otherToken.trim()) : Boolean(listed);
   const haircut = jar ? jar.haircut_bps / 100 : 0;
 
-  const walletReady = useMemo(() => hasWallet(), []);
-
   const connect = useMutation({
     mutationFn: connectWallet,
     onSuccess: setWallet,
@@ -184,9 +182,7 @@ function TopupForm({ options, session, shortfall }: { options: TopupOptions; ses
         {shortfall ? `Your agent needs ${credits(shortfall)} more. ` : ""}
         Pay with almost any token you hold, on the network it's already on. Uniswap converts it, and credits arrive once the USDC reaches us. About 67 credits per $1.
       </p>
-      {!walletReady ? (
-        <p role="alert" className="agent-error">{errorText("no_wallet")}</p>
-      ) : !wallet ? (
+      {!wallet ? (
         <div className="connect-actions">
           <button type="button" className="workspace-button" disabled={connect.isPending} onClick={() => connect.mutate()}>
             {connect.isPending ? "Connecting…" : "Connect wallet"}

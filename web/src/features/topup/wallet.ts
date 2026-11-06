@@ -30,8 +30,6 @@ const hexChain = (chainId: number) => `0x${chainId.toString(16)}`;
 const hexValue = (value: string) => `0x${BigInt(value).toString(16)}`;
 const utf8Hex = (text: string) => `0x${[...new TextEncoder().encode(text)].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 
-export const hasWallet = () => Boolean((window as unknown as { ethereum?: unknown }).ethereum);
-
 export async function connectWallet(): Promise<string> {
   const accounts = await ask<string[]>("eth_requestAccounts");
   if (!accounts[0]) throw new WalletError("failed");

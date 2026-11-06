@@ -50,6 +50,7 @@ describe("Add credits page", () => {
   it("says plainly when no wallet is installed, and still offers card plans", async () => {
     mockSignIn();
     mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Connect wallet" }));
     expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("No browser wallet found"));
     expect(screen.getByRole("link", { name: "See monthly plans" })).toBeTruthy();
   });
