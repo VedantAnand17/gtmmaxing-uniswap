@@ -172,7 +172,7 @@ export class TopupService {
       if (input.chain_id !== BASE_CHAIN_ID || !isJarToken(input.token)) throw new TopupError("token_not_accepted");
       return "jar";
     }
-    if (input.rail === "auto" && this.deps.jar && input.chain_id === BASE_CHAIN_ID && isJarToken(input.token)) return "jar";
+    if (input.rail === "auto" && !input.plan && this.deps.jar && input.chain_id === BASE_CHAIN_ID && isJarToken(input.token)) return "jar";
     return input.chain_id === BASE_CHAIN_ID && same(input.token, BASE_USDC) ? "usdc" : "swap";
   }
 

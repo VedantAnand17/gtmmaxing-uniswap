@@ -422,6 +422,13 @@ describe("wallet top-ups", () => {
       expect((await create(s, { chain_id: 8453, token: NATIVE_TOKEN, plan: "starter-monthly", rail: "jar" })).body.error).toBe("plan_not_for_jar");
     });
 
+    it("never lets rail auto put a plan in the jar", async () => {
+      const s = await setup(WITH_JAR);
+      s.uniswap.rate = 2_000 / 1e12;
+      const created = await create(s, { chain_id: 8453, token: NATIVE_TOKEN, amount: "1000000000000000000", plan: "starter-monthly", rail: "auto" });
+      expect(created.body.topup).toMatchObject({ rail: "swap", plan: "starter-monthly" });
+    });
+
     it("gives up rather than quote a plan it cannot cover", async () => {
       const s = await setup();
       s.uniswap.output = { amount: "1000000", minimumAmount: "1000" }; // Never scales with the amount.

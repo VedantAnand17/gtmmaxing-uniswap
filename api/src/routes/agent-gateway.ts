@@ -131,6 +131,11 @@ export function agentGatewayRoute(deps: AgentGatewayRouteDeps): Hono<{ Bindings:
     const principal = await authedTopups(c);
     if (principal instanceof Response) return principal;
     if (!principal.agent.allowTopup) return c.json({ error: "top_up_not_allowed" }, 403);
+    const tenant = await deps.apiKeys.tenant(principal.agent.tenantId);
+    if (tenant) {
+      const rate = await deps.limits.consumeRate(tenant);
+      if (!rate.allowed) return c.json({ error: "rate_limited" }, 429, { "retry-after": String(Math.max(1, Math.ceil((rate.resetAt - now()) / 1000))) });
+    }
     c.header("cache-control", "no-store");
     try {
       return c.json({ topup: await run(deps.topups, principal) });
