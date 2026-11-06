@@ -45,16 +45,15 @@ export async function useChain(chainId: number): Promise<void> {
   }
 }
 
-/** Switches to a network the wallet may not know yet, adding it first when it says so (EIP-3085). */
+/** Switches to a network the wallet may not know yet, adding it when the switch fails (EIP-3085). */
 export async function addChain(chain: { chainId: number; name: string; rpcUrl: string; explorerUrl: string; currency: { name: string; symbol: string; decimals: number } }): Promise<void> {
   try {
     await provider().request({ method: "wallet_switchEthereumChain", params: [{ chainId: hexChain(chain.chainId) }] });
     return;
   } catch (error) {
     if (error instanceof WalletError) throw error;
-    const code = (error as { code?: number }).code;
-    if (code === 4001) throw new WalletError("rejected");
-    if (code !== 4902) throw new WalletError("wrong_chain");
+    // Wallets disagree on the error for an unknown chain: MetaMask says 4902, Rabby does not. Only a refusal stops here.
+    if ((error as { code?: number }).code === 4001) throw new WalletError("rejected");
   }
   await ask("wallet_addEthereumChain", [{ chainId: hexChain(chain.chainId), chainName: chain.name, rpcUrls: [chain.rpcUrl], blockExplorerUrls: [chain.explorerUrl], nativeCurrency: chain.currency }]);
   await useChain(chain.chainId);

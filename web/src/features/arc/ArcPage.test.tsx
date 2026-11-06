@@ -56,6 +56,17 @@ describe("Arc test checkout", () => {
     expect(BigInt(`0x${sent.data.slice(-64)}`)).toBe(1_500_000n);
   });
 
+  it("adds the network whatever error the wallet gives for an unknown chain, as Rabby doesn't use 4902", async () => {
+    mockSignIn();
+    const calls = fakeWallet({ code: -32603 });
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Connect wallet" }));
+    await screen.findByLabelText("Amount in test USDC");
+    fireEvent.click(screen.getByRole("button", { name: "Pay with test USDC" }));
+    expect(await screen.findByRole("heading", { name: /test USDC received/ })).toBeTruthy();
+    expect(calls.some((call) => call.method === "wallet_addEthereumChain")).toBe(true);
+  });
+
   it("explains a declined transfer, and sends nothing for a bad amount", async () => {
     mockSignIn();
     const calls = fakeWallet();
