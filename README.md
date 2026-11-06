@@ -105,7 +105,9 @@ Live on production: `research.gtmmaxing.eth` [points at a production agent](http
 | Reading receipts on Arc | [`api/src/payments/arc.ts`](api/src/payments/arc.ts) |
 | Checkout page | [`web/src/features/arc/ArcPage.tsx`](web/src/features/arc/ArcPage.tsx) |
 | Arc Studio project | [Open in Arc Studio](https://studio.arc.io/share/gtmmaxing-usdc-credit-checkout-2kif6xoiet), [deployed app](https://arc-studio-ca8f39474dfb448abe4cbc25.vercel.app/) |
-| Live test payment | [1 test USDC on the Arc explorer](https://explorer.testnet.arc.io/tx/0xab63a1f729ef7eb3e0f18e4b20722f29859928f80e74b22ef7cc66902386e88a) |
+| Arc Studio source | [`arc-studio/`](arc-studio/), exported from Studio |
+| Payment on the Studio app | [1 test USDC on the Arc explorer](https://explorer.testnet.arc.io/tx/0xc46b34450d31d0d1795f16563bdb47ef05fb804e2ceba7a2d36154e8f83a98d9) |
+| Payment on gtmmaxing.com | [1 test USDC on the Arc explorer](https://explorer.testnet.arc.io/tx/0xab63a1f729ef7eb3e0f18e4b20722f29859928f80e74b22ef7cc66902386e88a) |
 
 ## License
 

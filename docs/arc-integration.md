@@ -40,3 +40,11 @@ sequenceDiagram
 | Routes | `api/src/routes/arc.ts` |
 | Page | `web/src/features/arc/ArcPage.tsx` |
 | Tests | `api/test/arc-checkout.test.ts`, `web/src/features/arc/ArcPage.test.tsx` |
+
+## Arc Studio
+
+The same checkout was also built and deployed from Arc Studio, and its exported source is in [`arc-studio/`](../arc-studio/).
+It sends one USDC transfer to the same treasury and shows a receipt read from the confirmed transaction.
+Share link: https://studio.arc.io/share/gtmmaxing-usdc-credit-checkout-2kif6xoiet
+Deployed app: https://arc-studio-ca8f39474dfb448abe4cbc25.vercel.app/
+A real test payment on that app: https://explorer.testnet.arc.io/tx/0xc46b34450d31d0d1795f16563bdb47ef05fb804e2ceba7a2d36154e8f83a98d9
