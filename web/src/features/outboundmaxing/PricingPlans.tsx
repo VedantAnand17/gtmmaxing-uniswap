@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CREDIT_PLANS, planById, type Billing, type CreditPlan } from "@found/contracts";
+import { CREDIT_PLANS, parsePlanChoice, type Billing, type CreditPlan } from "@found/contracts";
 import { api } from "../../lib/apiClient";
 import { leavePage } from "../../lib/navigation";
 import type { SessionUser } from "../../lib/session";
@@ -16,9 +16,7 @@ export function checkoutUrl(plan: CreditPlan, billing: Billing, user: SessionUse
 
 /** `?plan=growth-annual`, set when sign-in returns here to finish choosing a plan. */
 function pendingChoice(search: string): { plan: CreditPlan; billing: Billing } | null {
-  const [id, billing] = (new URLSearchParams(search).get("plan") ?? "").split("-");
-  const plan = planById(id ?? "");
-  return plan && (billing === "monthly" || billing === "annual") ? { plan, billing } : null;
+  return parsePlanChoice(new URLSearchParams(search).get("plan"));
 }
 
 const formatCredits = (credits: number) => credits.toLocaleString("en-US");
@@ -93,11 +91,12 @@ export function PricingPlans() {
               >
                 {opening === plan.id ? "Opening checkout…" : `Choose ${plan.name}`}
               </a>
+              <a className="plan-crypto" href={`/topup/?plan=${plan.id}-${billing}`} aria-label={`Pay for ${plan.name} with crypto`}>Pay with crypto</a>
             </article>
           );
         })}
       </div>
-      <p className="plan-footnote">Monthly plans add their credits every month. Unused credits roll over. Checkout is handled securely by Stripe.<br />*Unlimited is subject to our fair use policy of {formatCredits(FAIR_USE_CREDITS)} credits a month. <a href={AGENCY_CTA}>Need more? Talk to us.</a></p>
+      <p className="plan-footnote">Monthly plans add their credits every month. Unused credits roll over. Card checkout is handled securely by Stripe. Crypto payments go through Uniswap, from almost any token on eight networks, and cover one billing period with no renewal.<br />*Unlimited is subject to our fair use policy of {formatCredits(FAIR_USE_CREDITS)} credits a month. <a href={AGENCY_CTA}>Need more? Talk to us.</a></p>
     </>
   );
 }

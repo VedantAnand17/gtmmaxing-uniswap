@@ -11,13 +11,13 @@ const OPTIONS: TopupOptions = {
 };
 
 const view = (over: Partial<TopupView>): TopupView => ({
-  id: "tp_mock", rail: "swap", routing: "CHAINED", status: "open", estimated_credits: creditsForMicros(5_000_000), minimum_credits: creditsForMicros(4_900_000),
+  id: "tp_mock", rail: "swap", routing: "CHAINED", plan: null, amount_in: "1000000000000000", status: "open", estimated_credits: creditsForMicros(5_000_000), minimum_credits: creditsForMicros(4_900_000),
   credits: null, settlement_tx: null, error: null, action: { kind: "none" }, ...over,
 });
 
 /** Simulates a quote, one wallet step and a delivery; the wallet itself is the browser's. */
 export const mockTopups: TopupsClient = {
   options: async () => OPTIONS,
-  create: async () => view({ action: { kind: "send_tx", label: "Confirm the payment", tx: { chain_id: BASE_CHAIN_ID, to: BASE_USDC, data: "0x", value: "0" } } }),
+  create: async (input) => view({ plan: input.plan ?? null, ...(input.plan ? { estimated_credits: 4_500, minimum_credits: 4_500, amount_in: "27500000000000000" } : {}), action: { kind: "send_tx", label: "Confirm the payment", tx: { chain_id: BASE_CHAIN_ID, to: BASE_USDC, data: "0x", value: "0" } } }),
   next: async () => view({ status: "credited", credits: 333, settlement_tx: `0x${"ab".repeat(32)}` }),
 };

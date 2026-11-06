@@ -57,6 +57,30 @@ describe("Add credits page", () => {
     expect(screen.getByRole("link", { name: "See monthly plans" })).toBeTruthy();
   });
 
+  it("sells a plan from the pricing page's link: no amount to work out, and the price and credits up front", async () => {
+    mockSignIn();
+    const calls = fakeWallet();
+    mount("/topup/?plan=growth-annual");
+    expect(await screen.findByRole("heading", { name: "Buy Growth" })).toBeTruthy();
+    expect(await screen.findByText(/\$600 for 54,000 credits, covering one year with no renewal/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Connect wallet" }));
+    await screen.findByRole("button", { name: "Get a quote" });
+    expect(screen.queryByLabelText(/^Amount/)).toBeNull();
+    expect(screen.queryByText(/token jar/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Get a quote" }));
+    expect(await screen.findByText("Growth, one year")).toBeTruthy();
+    expect(screen.getByText("0.0275 ETH")).toBeTruthy();
+    expect(screen.getByText(/About 4,500 credits/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Pay" }));
+    expect(await screen.findByText(/Growth, one year is paid/)).toBeTruthy();
+    await waitFor(() => expect(calls.some((call) => call.method === "eth_sendTransaction")).toBe(true));
+  });
+
+  it("sends a signed-out buyer back to the same plan after sign-in", async () => {
+    mount("/topup/?plan=starter-monthly");
+    expect(await screen.findByRole("heading", { name: "Sign in to buy Starter" })).toBeTruthy();
+  });
+
   it("goes from the agent's shortfall through a quote and payment to credits added", async () => {
     mockSignIn();
     const calls = fakeWallet();

@@ -71,6 +71,8 @@ export interface CallContext {
 export interface AgentGatewayDeps {
   /** Where an account out of credits can add them, when that is offered. */
   topUpLink?: (shortfallCredits: number) => string;
+  /** Wallet top-ups are on, so an agent its owner allows can be told where to buy. */
+  canTopUp?: boolean;
   runs: AgentRunStore;
   credits: CreditsService;
   tools: ToolLauncher;
@@ -206,8 +208,11 @@ export class AgentGateway {
       return refused({ reason: "temporarily_unavailable", summary: "Nothing was sent: email lookups are temporarily unavailable on our side, so nothing was charged; try again later.", quote }, balance);
     }
     if (!cacheOnly && balance < quote) {
-      const topUp = this.deps.topUpLink?.(quote - balance);
-      return refused({ reason: "insufficient_credits", summary: `Nothing was sent: this needs up to ${credits(quote)} and you have ${balance}${topUp ? ", so ask the account owner to add credits at the link and repeat this call" : ""}.`, quote, next: { tool: "gtm_account", args: {} }, ...(topUp ? { link: topUp } : {}) }, balance);
+      const shortfall = quote - balance;
+      const topUp = this.deps.topUpLink?.(shortfall);
+      const buyOwn = Boolean(this.deps.canTopUp && principal.agent.allowTopup && ctx.baseUrl);
+      const ask = buyOwn ? ", so buy credits from your wallet at top_up, or ask the owner" : topUp ? ", so ask the account owner to add credits at the link and repeat this call" : "";
+      return refused({ reason: "insufficient_credits", summary: `Nothing was sent: this needs up to ${credits(quote)} and you have ${balance}${ask}.`, quote, next: { tool: "gtm_account", args: {} }, ...(topUp ? { link: topUp } : {}), ...(buyOwn ? { top_up: { url: `${ctx.baseUrl}/v1/agent/topups`, credits: shortfall } } : {}) }, balance);
     }
     // 4. The agent's own cap, enforced atomically with creating the run.
     const admitted = await this.runs.admit({
@@ -756,6 +761,7 @@ function refused(refusal: Refusal, balance: number): AgentAnswer {
     ...(refusal.quote !== undefined ? { quote: refusal.quote } : {}),
     ...(refusal.fields ? { fields: refusal.fields } : {}),
     ...(refusal.link ? { link: refusal.link } : {}),
+    ...(refusal.top_up ? { top_up: refusal.top_up } : {}),
     next: refusal.next ?? { tool: "gtm_account", args: {} },
   });
 }

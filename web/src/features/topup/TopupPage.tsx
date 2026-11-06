@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
-import { BASE_CHAIN_ID, type TopupOptions, type TopupProof, type TopupRail, type TopupView } from "@found/contracts";
+import { BASE_CHAIN_ID, parsePlanChoice, periodCredits, type PlanChoice, type TopupOptions, type TopupProof, type TopupRail, type TopupView } from "@found/contracts";
 import { api } from "../../lib/apiClient";
 import { leavePage } from "../../lib/navigation";
 import type { Session } from "../../lib/session";
@@ -50,6 +50,7 @@ const ERRORS: Record<string, string> = {
   stale_wallet_signature: "That wallet signature expired. Please try again.",
   too_many_topups: "Too many quotes in a few minutes. Please wait a moment and try again.",
   chain_not_supported: "That network isn't supported yet.",
+  invalid_plan: "That plan isn't available. Please choose one from the plans page.",
   payment_mismatch: "That transaction doesn't match this payment, so it wasn't credited. Contact us if funds left your wallet.",
   payment_reverted: "That transaction failed onchain, so nothing was paid. Your funds stayed in your wallet, apart from network fees.",
   payment_already_used: "That transaction has already been used for a top-up.",
@@ -62,6 +63,15 @@ const ERRORS: Record<string, string> = {
 const errorText = (code: string | null | undefined) => ERRORS[code ?? ""] ?? "That didn't go through. Please try again.";
 const codeOf = (error: unknown) => error instanceof TopupRequestError || error instanceof WalletError ? error.code : "failed";
 const credits = (n: number) => `${n.toLocaleString("en-US")} ${n === 1 ? "credit" : "credits"}`;
+/** A raw token amount for reading: enough digits to recognise it in the wallet, without the dust. */
+function tokenAmount(raw: string, decimals: number): string {
+  const padded = raw.padStart(decimals + 1, "0");
+  const whole = padded.slice(0, padded.length - decimals);
+  const fraction = padded.slice(padded.length - decimals).replace(/0+$/, "");
+  const leadingZeros = fraction.match(/^0*/)![0].length;
+  const shown = fraction.slice(0, whole === "0" ? leadingZeros + 4 : 4).replace(/0+$/, "");
+  return `${Number(whole).toLocaleString("en-US")}${shown ? `.${shown}` : ""}`;
+}
 const short = (address: string) => `${address.slice(0, 6)}…${address.slice(-4)}`;
 
 function Panel({ title, children }: { title: string; children: ReactNode }) {
@@ -75,26 +85,30 @@ function Panel({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-const PlansLink = () => <p className="connect-account">Prefer to pay by card? <a href="/outboundmaxing/">See monthly plans</a>.</p>;
+const PlansLink = () => <p className="connect-account">Prefer to pay by card? <a href="/outboundmaxing/#plans">See monthly plans</a>.</p>;
+const planLabel = ({ plan, billing }: PlanChoice) => `${plan.name}, ${billing === "annual" ? "one year" : "one month"}`;
 
 export function TopupPage() {
   const { session, isLoading } = useSession();
   const search = useLocation({ select: (location) => location.search as Record<string, unknown> });
   const needed = Number(search.credits);
   const shortfall = Number.isInteger(needed) && needed > 0 ? needed : null;
+  const planParam = typeof search.plan === "string" ? search.plan : null;
+  const choice = parsePlanChoice(planParam);
   const options = useQuery({ queryKey: ["topup-options"], queryFn: () => api.topups.options(), retry: false });
   const signIn = useMutation({
     mutationFn: async () => {
-      const start = api.session.signIn(`/topup/${shortfall ? `?credits=${shortfall}` : ""}`);
+      const start = api.session.signIn(`/topup/${choice ? `?plan=${planParam}` : shortfall ? `?credits=${shortfall}` : ""}`);
       if ("redirect" in start) leavePage(start.redirect);
     },
   });
 
-  if (isLoading || options.isLoading) return <Panel title="Add credits"><p role="status">Loading…</p></Panel>;
-  if (!options.data?.enabled) return <Panel title="Add credits"><p>Wallet payments aren't available right now.</p><PlansLink /></Panel>;
+  const title = choice ? `Buy ${choice.plan.name}` : "Add credits";
+  if (isLoading || options.isLoading) return <Panel title={title}><p role="status">Loading…</p></Panel>;
+  if (!options.data?.enabled) return <Panel title={title}><p>Wallet payments aren't available right now.</p><PlansLink /></Panel>;
   if (!session) {
     return (
-      <Panel title="Sign in to add credits">
+      <Panel title={choice ? `Sign in to buy ${choice.plan.name}` : "Sign in to add credits"}>
         <p>Credits go to your GTMMAXING account, so sign in with Google first.</p>
         <div className="connect-actions">
           <button type="button" className="workspace-button" disabled={signIn.isPending} onClick={() => signIn.mutate()}>Sign in with Google</button>
@@ -102,7 +116,7 @@ export function TopupPage() {
       </Panel>
     );
   }
-  return <TopupForm options={options.data} session={session} shortfall={shortfall} />;
+  return <TopupForm options={options.data} session={session} shortfall={shortfall} choice={choice} planParam={planParam} />;
 }
 
 interface Picked {
@@ -112,7 +126,7 @@ interface Picked {
   decimals: number;
 }
 
-function TopupForm({ options, session, shortfall }: { options: TopupOptions; session: Session; shortfall: number | null }) {
+function TopupForm({ options, session, shortfall, choice, planParam }: { options: TopupOptions; session: Session; shortfall: number | null; choice: PlanChoice | null; planParam: string | null }) {
   const chains = options.chains ?? [];
   const queryClient = useQueryClient();
   const [wallet, setWallet] = useState<string | null>(null);
@@ -122,6 +136,7 @@ function TopupForm({ options, session, shortfall }: { options: TopupOptions; ses
   const [otherToken, setOtherToken] = useState("");
   const [amount, setAmount] = useState("");
   const [useJar, setUseJar] = useState(false);
+  const [paying, setPaying] = useState<Picked | null>(null);
   const [topup, setTopup] = useState<TopupView | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -131,7 +146,7 @@ function TopupForm({ options, session, shortfall }: { options: TopupOptions; ses
 
   const listed = chain?.tokens.find((token) => token.address === tokenChoice);
   const jar = options.jar;
-  const jarOffered = Boolean(jar && listed?.jar && chainId === jar.chain_id && jar.available_micros > 0);
+  const jarOffered = Boolean(!choice && jar && listed?.jar && chainId === jar.chain_id && jar.available_micros > 0);
   const rail: TopupRail | undefined = jarOffered && useJar ? "jar" : undefined;
   const custom = tokenChoice === OTHER;
   const tokenReady = custom ? /^0x[0-9a-fA-F]{40}$/.test(otherToken.trim()) : Boolean(listed);
@@ -149,12 +164,14 @@ function TopupForm({ options, session, shortfall }: { options: TopupOptions; ses
       const picked: Picked = listed
         ? { chainId, address: listed.address, symbol: listed.symbol, decimals: listed.decimals }
         : { chainId, address: otherToken.trim(), ...(await readToken(chainId, otherToken.trim())) };
-      const raw = parseAmount(amount, picked.decimals);
+      // For a plan the server sizes the payment; one whole token is only there to price it.
+      const raw = choice ? (10n ** BigInt(picked.decimals)).toString() : parseAmount(amount, picked.decimals);
       if (!raw) throw new TopupRequestError("invalid_amount");
+      setPaying(picked);
       const reusable = signature.current && signature.current.wallet === wallet && Date.now() - signature.current.issued_at < SIGNATURE_REUSE_MS;
       if (!reusable) signature.current = { wallet: wallet!, ...(await authorizeWallet(session.user.email, wallet!)) };
       const { signature: signed, issued_at } = signature.current!;
-      return api.topups.create({ wallet: wallet!, signature: signed, issued_at, chain_id: picked.chainId, token: picked.address, amount: raw, ...(rail ? { rail } : {}) });
+      return api.topups.create({ wallet: wallet!, signature: signed, issued_at, chain_id: picked.chainId, token: picked.address, amount: raw, ...(rail ? { rail } : {}), ...(choice ? { plan: planParam! } : {}) });
     },
     onSuccess: setTopup,
     onError: (failure) => setError(codeOf(failure) === "invalid_amount" ? "Enter a valid amount." : errorText(codeOf(failure))),
@@ -210,7 +227,7 @@ function TopupForm({ options, session, shortfall }: { options: TopupOptions; ses
   if (topup?.status === "credited") {
     return (
       <Panel title={`${credits(topup.credits ?? 0)} added`}>
-        <p role="status">{shortfall ? "Your agent can repeat its request now; it won't be charged twice." : "They're in your balance and ready to use."}</p>
+        <p role="status">{shortfall ? "Your agent can repeat its request now; it won't be charged twice." : choice ? `${planLabel(choice)} is paid. They're in your balance and ready to use.` : "They're in your balance and ready to use."}</p>
         {topup.settlement_tx && <p><a href={`https://basescan.org/tx/${topup.settlement_tx}`} target="_blank" rel="noreferrer">View the payment on Basescan</a></p>}
         <Link to="/usage" className="feature-back-link">See your balance on Usage</Link>
         <p className="connect-account">Signed in as {session.user.email}</p>
@@ -240,11 +257,18 @@ function TopupForm({ options, session, shortfall }: { options: TopupOptions; ses
   }
 
   return (
-    <Panel title="Add credits">
-      <p>
-        {shortfall ? `Your agent needs ${credits(shortfall)} more. ` : ""}
-        Pay with almost any token you hold, on the network it's already on. Uniswap converts it, and credits arrive once the USDC reaches us. About 67 credits per $1.
-      </p>
+    <Panel title={choice ? `Buy ${choice.plan.name}` : "Add credits"}>
+      {choice ? (
+        <p>
+          ${choice.plan.prices[choice.billing].usd.toLocaleString("en-US")} for {credits(periodCredits(choice.plan, choice.billing))}, covering {choice.billing === "annual" ? "one year" : "one month"} with no renewal.
+          {" "}Pay with almost any token you hold, on the network it's already on, and Uniswap converts it. Any amount over the price comes back as extra credits.
+        </p>
+      ) : (
+        <p>
+          {shortfall ? `Your agent needs ${credits(shortfall)} more. ` : ""}
+          Pay with almost any token you hold, on the network it's already on. Uniswap converts it, and credits arrive once the USDC reaches us. About 67 credits per $1.
+        </p>
+      )}
       {!wallet ? (
         <div className="connect-actions">
           <button type="button" className="workspace-button" disabled={connect.isPending} onClick={() => connect.mutate()}>
@@ -272,10 +296,12 @@ function TopupForm({ options, session, shortfall }: { options: TopupOptions; ses
             </select>
             {custom && <input aria-label="Token address" placeholder="0x…" spellCheck={false} value={otherToken} onChange={(event) => setOtherToken(event.target.value)} />}
           </div>
-          <div className="agent-field">
-            <label htmlFor="topup-amount">Amount{listed ? ` in ${listed.symbol}` : ""}</label>
-            <input id="topup-amount" inputMode="decimal" autoComplete="off" value={amount} onChange={(event) => setAmount(event.target.value)} />
-          </div>
+          {!choice && (
+            <div className="agent-field">
+              <label htmlFor="topup-amount">Amount{listed ? ` in ${listed.symbol}` : ""}</label>
+              <input id="topup-amount" inputMode="decimal" autoComplete="off" value={amount} onChange={(event) => setAmount(event.target.value)} />
+            </div>
+          )}
           {jarOffered && (
             <label className="topup-jar">
               <input type="checkbox" checked={useJar} onChange={(event) => setUseJar(event.target.checked)} />
@@ -285,7 +311,7 @@ function TopupForm({ options, session, shortfall }: { options: TopupOptions; ses
             </label>
           )}
           <div className="connect-actions">
-            <button type="submit" className="workspace-button" disabled={quote.isPending || !tokenReady || !amount.trim()}>
+            <button type="submit" className="workspace-button" disabled={quote.isPending || !tokenReady || (!choice && !amount.trim())}>
               {quote.isPending ? "Getting a quote…" : "Get a quote"}
             </button>
           </div>
@@ -298,6 +324,8 @@ function TopupForm({ options, session, shortfall }: { options: TopupOptions; ses
       ) : (
         <>
           <dl className="approval-details">
+            {choice && <div><dt>Plan</dt><dd>{planLabel(choice)}</dd></div>}
+            {paying && <div><dt>You'll pay</dt><dd>{tokenAmount(topup.amount_in, paying.decimals)} {paying.symbol}</dd></div>}
             <div><dt>You'll get</dt><dd>About {credits(topup.estimated_credits)}, and at least {credits(topup.minimum_credits)}</dd></div>
             <div><dt>Route</dt><dd>{ROUTE[topup.rail === "swap" ? (topup.routing ?? "CLASSIC") : topup.rail] ?? "Uniswap route to USDC on Base"}</dd></div>
           </dl>

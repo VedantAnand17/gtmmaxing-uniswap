@@ -13,6 +13,8 @@ export interface UniswapQuoteInput {
   tokenInChainId: number;
   tokenOut: string;
   tokenOutChainId: number;
+  /** Percent. Omitted leaves Uniswap's default, which was 2.5% on Base. */
+  slippageTolerance?: number;
 }
 
 export interface UniswapQuote {

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { eq } from "drizzle-orm";
 import { privateKeyToAccount } from "viem/accounts";
 import { BASE_USDC, NATIVE_TOKEN, topupAuthorization } from "@found/contracts";
 import { createRuntime, type Runtime } from "../src/runtime.js";
+import { accounts } from "../src/db/schema.js";
 import { CREDIT_ATOMIC } from "../src/domain/credits.js";
 import { walletTypedData } from "../src/application/topups/index.js";
 import { TOPUP_CHAINS } from "../src/application/topups/catalog.js";
@@ -35,6 +37,8 @@ class FakeChains implements ChainReader {
 class FakeUniswap implements UniswapApi {
   routing = "CLASSIC";
   output = { amount: "10000000", minimumAmount: "9800000" };
+  /** When set, quotes scale with the amount: USDC micros per one raw token unit, at 0.5% slippage. */
+  rate: number | null = null;
   approval: { to: string; data: string; value: string } | null = null;
   permitData: Record<string, unknown> | null = null;
   plan = {} as UniswapPlan;
@@ -43,7 +47,9 @@ class FakeUniswap implements UniswapApi {
   swapInputs: unknown[] = [];
   async quote(input: UniswapQuoteInput) {
     this.quotes.push(input);
-    return { routing: this.routing, quote: { output: this.output, swapper: input.swapper }, permitData: this.permitData };
+    if (this.rate !== null && Number(input.amount) * this.rate < 1_000) throw new UniswapError(400, "QuoteAmountTooLowError", "too small");
+    const output = this.rate === null ? this.output : { amount: String(Math.floor(Number(input.amount) * this.rate)), minimumAmount: String(Math.floor(Number(input.amount) * this.rate * 0.995)) };
+    return { routing: this.routing, quote: { output, swapper: input.swapper }, permitData: this.permitData };
   }
   async checkApproval() { return this.approval; }
   async swap(input: unknown) { this.swapInputs.push(input); return { to: ROUTER, data: "0xswap", value: "0", chainId: 42161 }; }
@@ -83,6 +89,7 @@ const create = async (s: Setup, input: Record<string, unknown>, signer = account
 const next = (s: Setup, id: string, proof: Record<string, unknown> = {}) => post(s.runtime, s.headers, `/topups/${id}/next`, proof);
 const balance = async (s: Setup) => (await s.runtime.deps.credits.balance(s.user.creditAccountId)) / CREDIT_ATOMIC;
 const FREE = 10;
+const WITH_JAR = { TOPUP_JAR: JAR, TOPUP_RELEASER: RELEASER };
 
 describe("chain access", () => {
   it("has a working endpoint for every chain the page offers, and avoids the Base one that refuses log searches", () => {
@@ -308,7 +315,6 @@ describe("wallet top-ups", () => {
   });
 
   describe("jar rail", () => {
-    const WITH_JAR = { TOPUP_JAR: JAR, TOPUP_RELEASER: RELEASER };
     const jarTx = (s: Setup, n: number, amount = 1_000_000_000_000_000n) => s.chains.add(hash(n), { to: JAR, data: "0x", value: amount });
 
     it("takes a small plain transfer into the jar and credits its value less the haircut", async () => {
@@ -359,6 +365,134 @@ describe("wallet top-ups", () => {
       s.chains.add(hash(2), { to: TREASURY, data: "0x", value: 1_000_000_000_000_000n });
       expect((await next(s, b.body.topup.id, { tx_hash: hash(2) })).body.topup).toMatchObject({ status: "failed", error: "payment_mismatch" });
       expect(await balance(s)).toBe(FREE);
+    });
+  });
+
+  describe("buying a plan", () => {
+    const WETH_RATE = 2_000 / 1e12; // 1e18 raw units are worth $2,000 in USDC micros.
+
+    it("sizes a cross-chain payment so even the worst delivery covers the plan, and grants the plan's credits", async () => {
+      const s = await setup();
+      s.uniswap.rate = WETH_RATE;
+      s.uniswap.routing = "CLASSIC";
+      const created = await create(s, { chain_id: 42161, token: NATIVE_TOKEN, amount: "1000000000000000000", plan: "growth-monthly" });
+      const topup = created.body.topup as never as { id: string; plan: string; amount_in: string; minimum_credits: number; estimated_credits: number };
+      expect(topup.plan).toBe("growth-monthly");
+      expect(s.uniswap.quotes.at(-1)).toMatchObject({ recipient: TREASURY, slippageTolerance: 0.5 });
+      const worst = Number(topup.amount_in) * WETH_RATE * 0.995;
+      expect(worst).toBeGreaterThanOrEqual(60_000_000);
+      expect(worst).toBeLessThan(60_500_000);
+      expect(topup.minimum_credits).toBeGreaterThanOrEqual(4_500);
+      expect(s.uniswap.quotes.length).toBeLessThanOrEqual(3);
+    });
+
+    it("grants the plan, not the top-up rate, and returns anything above the price as credits", async () => {
+      const s = await setup();
+      const created = await create(s, { chain_id: 8453, token: BASE_USDC, plan: "growth-monthly" });
+      const topup = created.body.topup as never as { id: string; amount_in: string; estimated_credits: number };
+      expect(topup).toMatchObject({ amount_in: "60000000", estimated_credits: 4_500 });
+      s.chains.add(hash(70), { to: BASE_USDC, transfers: [{ logIndex: 1, token: BASE_USDC, from: account.address.toLowerCase(), to: TREASURY, value: 60_150_000n }] });
+      expect((await next(s, topup.id, { tx_hash: hash(70) })).body.topup).toMatchObject({ status: "credited", credits: 4_510 });
+      expect(await balance(s)).toBe(FREE + 4_510);
+    });
+
+    it("sells annual plans above the single-payment limit, adding the full year", async () => {
+      const s = await setup();
+      const created = await create(s, { chain_id: 8453, token: BASE_USDC, plan: "unlimited-annual" });
+      expect(created.body.topup).toMatchObject({ amount_in: "1290000000", estimated_credits: 120_000 });
+    });
+
+    it("never gives plan credits for less than the plan's price", async () => {
+      const s = await setup();
+      const created = await create(s, { chain_id: 8453, token: BASE_USDC, plan: "starter-monthly" });
+      s.chains.add(hash(71), { to: BASE_USDC, transfers: [{ logIndex: 1, token: BASE_USDC, from: account.address.toLowerCase(), to: TREASURY, value: 3_000_000n }] });
+      expect((await next(s, created.body.topup.id, { tx_hash: hash(71) })).body.topup).toMatchObject({ status: "credited", credits: 200 });
+    });
+
+    it("finds a size for a token too cheap to price one whole unit of", async () => {
+      const s = await setup();
+      s.uniswap.rate = 1 / 1e15; // One whole token is below Uniswap's minimum quotable size.
+      const created = await create(s, { chain_id: 8453, token: ARB_ADDRESS, amount: "1000000000000000", plan: "starter-monthly" });
+      expect(created.status).toBe(200);
+    });
+
+    it("refuses an unknown plan, and a plan through the jar", async () => {
+      const s = await setup(WITH_JAR);
+      expect((await create(s, { chain_id: 8453, token: BASE_USDC, plan: "mega-monthly" })).body.error).toBe("invalid_plan");
+      expect((await create(s, { chain_id: 8453, token: NATIVE_TOKEN, plan: "starter-monthly", rail: "jar" })).body.error).toBe("plan_not_for_jar");
+    });
+
+    it("gives up rather than quote a plan it cannot cover", async () => {
+      const s = await setup();
+      s.uniswap.output = { amount: "1000000", minimumAmount: "1000" }; // Never scales with the amount.
+      expect((await create(s, { chain_id: 8453, token: ARB_ADDRESS, plan: "starter-monthly" })).body.error).toBe("no_route");
+      expect(s.uniswap.quotes.length).toBeLessThanOrEqual(3);
+    });
+  });
+
+  describe("agents buying their own credits", () => {
+    const agentSetup = async (extra: Record<string, string> = {}) => {
+      const s = await setup({ AGENT_GATEWAY_ENABLED: "true", ...extra });
+      const made = await (await s.runtime.app.request("/agents/tokens", { method: "POST", headers: { ...s.headers, "content-type": "application/json" }, body: JSON.stringify({ name: "Buyer" }) })).json() as { agent: { id: string; allow_topup: boolean }; token: string };
+      return { ...s, agent: made.agent, bearer: { authorization: `Bearer ${made.token}` } };
+    };
+    type AgentSetup = Awaited<ReturnType<typeof agentSetup>>;
+    const allow = (s: AgentSetup, on = true) => s.runtime.app.request(`/agents/${s.agent.id}`, { method: "PATCH", headers: { ...s.headers, "content-type": "application/json" }, body: JSON.stringify({ allow_topup: on }) });
+    const buy = async (s: AgentSetup, input: Record<string, unknown>) => post(s.runtime, s.bearer, "/v1/agent/topups", { ...(await authorize(s)), ...input });
+
+    it("is off until the owner allows this agent", async () => {
+      const s = await agentSetup();
+      expect(s.agent.allow_topup).toBe(false);
+      expect(await buy(s, { chain_id: 8453, token: BASE_USDC, amount: "5000000" })).toMatchObject({ status: 403, body: { error: "top_up_not_allowed" } });
+      expect((await post(s.runtime, {}, "/v1/agent/topups", {})).status).toBe(401);
+    });
+
+    it("lets an allowed agent pay from its own wallet and credits the owner's account", async () => {
+      const s = await agentSetup();
+      await allow(s);
+      const options = await (await s.runtime.app.request("/v1/agent/topups/options", { headers: s.bearer })).json() as { account: string; enabled: boolean; allowed: boolean };
+      expect(options).toMatchObject({ enabled: true, allowed: true, account: "payer@example.com" });
+      const created = await buy(s, { chain_id: 8453, token: BASE_USDC, amount: "3000000" });
+      s.chains.add(hash(80), { to: BASE_USDC, transfers: [{ logIndex: 1, token: BASE_USDC, from: account.address.toLowerCase(), to: TREASURY, value: 3_000_000n }] });
+      const done = await post(s.runtime, s.bearer, `/v1/agent/topups/${created.body.topup.id}/next`, { tx_hash: hash(80) });
+      expect(done.body.topup).toMatchObject({ status: "credited", credits: 200 });
+      expect(await balance(s)).toBe(FREE + 200);
+    });
+
+    it("holds an agent to a smaller limit, and does not let it buy plans", async () => {
+      const s = await agentSetup();
+      await allow(s);
+      expect((await buy(s, { chain_id: 8453, token: BASE_USDC, amount: "50000001" })).body.error).toBe("amount_too_large");
+      expect((await buy(s, { chain_id: 8453, token: BASE_USDC, amount: "50000000" })).status).toBe(200);
+      expect((await buy(s, { chain_id: 8453, token: BASE_USDC, amount: "50000000", plan: "starter-monthly" })).body.error).toBe("plan_not_for_agents");
+    });
+
+    it("rail auto puts a small payment in the jar and a larger one through a swap", async () => {
+      const s = await agentSetup(WITH_JAR);
+      await allow(s);
+      s.uniswap.output = { amount: "1500000", minimumAmount: "1490000" };
+      expect((await buy(s, { chain_id: 8453, token: NATIVE_TOKEN, amount: "1000000000000000", rail: "auto" })).body.topup).toMatchObject({ rail: "jar" });
+      s.uniswap.output = { amount: "20000000", minimumAmount: "19900000" };
+      expect((await buy(s, { chain_id: 8453, token: NATIVE_TOKEN, amount: "9000000000000000", rail: "auto" })).body.topup).toMatchObject({ rail: "swap" });
+    });
+
+    it("rail auto falls back to a swap when the jar is full", async () => {
+      const s = await agentSetup(WITH_JAR);
+      await allow(s);
+      s.chains.threshold = 1_000_000;
+      s.uniswap.output = { amount: "1500000", minimumAmount: "1490000" };
+      expect((await buy(s, { chain_id: 8453, token: NATIVE_TOKEN, amount: "1000000000000000", rail: "auto" })).body.topup).toMatchObject({ rail: "swap" });
+    });
+
+    it("tells an allowed agent how to buy when it runs out, and tells others only the link", async () => {
+      const s = await agentSetup({ WEB_APP_URL: "https://gtmmaxing.com", TOOLS_ENABLED: "true" });
+      const call = async () => (await (await s.runtime.app.request("/v1/agent/tools/gtm_research_company", { method: "POST", headers: { ...s.bearer, "content-type": "application/json" }, body: JSON.stringify({ company: "vercel.com", max_credits: 500 }) })).json() as { answer: Record<string, unknown> }).answer;
+      await s.runtime.deps.db.update(accounts).set({ balanceAtomic: CREDIT_ATOMIC }).where(eq(accounts.id, s.user.creditAccountId));
+      const before = await call();
+      expect(before).toMatchObject({ reason: "insufficient_credits", link: "https://gtmmaxing.com/topup/?credits=1" });
+      expect(before).not.toHaveProperty("top_up");
+      await allow(s);
+      expect((await call()).top_up).toMatchObject({ url: expect.stringContaining("/v1/agent/topups") as string, credits: 1 });
     });
   });
 

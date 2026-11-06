@@ -5,6 +5,9 @@
   "description": "Finds, prices and clears a Uniswap Token Jar when it is profitable, using the Uniswap API.",
   "license": "MIT",
   "type": "module",
+  "exports": {
+    "./keeper": "./src/keeper.ts"
+  },
   "scripts": {
     "keeper": "node src/cli.ts",
     "typecheck": "tsc --noEmit",

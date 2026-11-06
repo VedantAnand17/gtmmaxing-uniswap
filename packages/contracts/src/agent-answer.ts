@@ -39,6 +39,8 @@ export const agentAnswerSchema = z.object({
   fields: z.array(z.string().max(40)).max(12).optional(),
   /** Download link, e.g. a run's CSV. */
   link: z.string().max(512).optional(),
+  /** Out of credits, and the owner lets this agent pay from its own wallet: where to buy them, and how many it needs. */
+  top_up: z.object({ url: z.string().max(256), credits: z.number().int().positive() }).optional(),
   replayed: z.literal(true).optional(),
 }).strict();
 
@@ -71,6 +73,7 @@ export interface AgentAnswerDraft {
   next: AgentNext;
   fields?: readonly string[];
   link?: string;
+  top_up?: { url: string; credits: number };
   replayed?: boolean;
 }
 
@@ -117,6 +120,7 @@ function build(draft: AgentAnswerDraft, rowCount: number, columnCount: number, c
     next: draft.next ?? DEFAULT_NEXT,
     ...(draft.fields?.length ? { fields: draft.fields.slice(0, 12).map((field) => field.slice(0, 40)) } : {}),
     ...(draft.link ? { link: draft.link } : {}),
+    ...(draft.top_up ? { top_up: draft.top_up } : {}),
     ...(draft.replayed ? { replayed: true as const } : {}),
   };
 }
@@ -169,6 +173,7 @@ export function answerText(answer: AgentAnswer): string {
   }
   if (answer.fields?.length) lines.push(`fields[${answer.fields.length}]: ${answer.fields.join(",")}`);
   if (answer.link) lines.push(`link: ${answer.link}`);
+  if (answer.top_up) lines.push(`top_up: ${answer.top_up.credits} credits at ${answer.top_up.url}`);
   if (answer.next) lines.push(`next: ${answer.next.tool}(${JSON.stringify(answer.next.args)})`);
   return lines.join("\n");
 }

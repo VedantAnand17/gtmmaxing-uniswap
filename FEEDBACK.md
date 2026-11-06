@@ -73,3 +73,11 @@ The docs discuss overshoot as lost value.
 For a merchant who credits customers on deposit, it is an exploit: deposit 100, get credit for 100, then clear the jar yourself for a threshold of 25 and take your 100 back.
 We cap the value credited per clearing round at the threshold, tracked by releaser nonce.
 **Suggestion:** add a section to the operator guide on crediting deposits safely.
+
+### 9. Exact-output quotes stop at the chain boundary
+
+A merchant selling something at a fixed price wants "deliver exactly $30 USDC".
+`EXACT_OUTPUT` for ETH on Base to USDC on Base returned a quote, but the same request from Arbitrum returned `QuoteAmountTooLowError` ("Order size is below the minimum quotable size"), and ARB on Arbitrum returned `NoRouteFoundError`.
+The same pairs quote normally with `EXACT_INPUT`, so these errors send you looking for a size or liquidity problem that isn't there.
+We now size a payment ourselves: price the token, scale it to clear the price at the guaranteed minimum, check, then credit any excess to the buyer.
+**Suggestion:** support `EXACT_OUTPUT` on `BRIDGE` and `CHAINED` routes, or return an error that says the type is the problem.

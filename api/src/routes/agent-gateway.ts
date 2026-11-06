@@ -1,10 +1,11 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
-import { answerText, outcomeToolDefinitions } from "@found/contracts";
+import { AGENT_TOPUP_MAX_MICROS, answerText, outcomeToolDefinitions, topupCreateSchema, topupProofSchema } from "@found/contracts";
 import { createAgentOpenApi } from "../agent-openapi.js";
 import type { Env } from "../config.js";
 import type { AgentGateway } from "../application/agent-gateway/index.js";
-import { agentResources, bearerChallenge, type AgentAccess, type AgentAuthenticator } from "../auth/agent-auth.js";
+import { TopupError, type TopupService } from "../application/topups/index.js";
+import { agentResources, bearerChallenge, type AgentAccess, type AgentAuthenticator, type AgentPrincipal } from "../auth/agent-auth.js";
 import { verifySigned } from "../auth/session.js";
 import { requestSource } from "../domain/request-source.js";
 import type { ApiKeyService, TenantLimits } from "../store/external.js";
@@ -52,6 +53,8 @@ export interface AgentGatewayRouteDeps {
   limits: TenantLimits;
   issuer: (request: Request) => string;
   sessionSecret: string | null;
+  /** Null until wallet top-ups are configured. */
+  topups?: TopupService | null;
   now?: () => number;
 }
 
@@ -111,6 +114,54 @@ export function agentGatewayRoute(deps: AgentGatewayRouteDeps): Hono<{ Bindings:
     if (c.req.header("accept")?.includes("text/plain")) return c.text(answerText(answer));
     return c.json({ answer, text: answerText(answer) });
   });
+
+  /**
+   * An agent buying credits from its own wallet, once its owner allows it. The
+   * wallet still signs for this account, and the agent's credit cap still
+   * limits what those credits can be spent on.
+   */
+  const authedTopups = async (c: Context<{ Bindings: Env }>) => {
+    const issuer = deps.issuer(c.req.raw);
+    const auth = await deps.auth.authenticate(c.req.raw, agentResources(issuer).api);
+    if (!auth.ok) return c.json({ error: auth.error }, auth.status, { "www-authenticate": bearerChallenge(`${issuer}/.well-known/oauth-protected-resource/v1/agent`, c.req.header("authorization") ? { error: "invalid_token" } : {}) });
+    return auth.principal;
+  };
+  const payingAgent = async (c: Context<{ Bindings: Env }>, run: (service: TopupService, principal: AgentPrincipal) => Promise<unknown>) => {
+    if (!deps.topups) return c.json({ error: "not_found" }, 404);
+    const principal = await authedTopups(c);
+    if (principal instanceof Response) return principal;
+    if (!principal.agent.allowTopup) return c.json({ error: "top_up_not_allowed" }, 403);
+    c.header("cache-control", "no-store");
+    try {
+      return c.json({ topup: await run(deps.topups, principal) });
+    } catch (error) {
+      if (error instanceof TopupError) return c.json({ error: error.code }, error.status);
+      throw error;
+    }
+  };
+
+  app.get("/topups/options", async (c) => {
+    if (!deps.topups) return c.json({ error: "not_found" }, 404);
+    const principal = await authedTopups(c);
+    if (principal instanceof Response) return principal;
+    c.header("cache-control", "no-store");
+    return c.json({ ...await deps.topups.options(), allowed: principal.agent.allowTopup, account: principal.user.email, max_micros_per_payment: AGENT_TOPUP_MAX_MICROS });
+  });
+
+  app.post("/topups", (c) => payingAgent(c, async (service, principal) => {
+    const input = topupCreateSchema.safeParse(await c.req.json().catch(() => null));
+    if (!input.success) throw new TopupError("invalid_request");
+    if (input.data.plan !== undefined) throw new TopupError("plan_not_for_agents");
+    return service.create(principal.user, input.data, { maxMicros: AGENT_TOPUP_MAX_MICROS });
+  }));
+
+  app.post("/topups/:id/next", (c) => payingAgent(c, async (service, principal) => {
+    const proof = topupProofSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!proof.success) throw new TopupError("invalid_request");
+    return service.advance(principal.user, c.req.param("id"), proof.data);
+  }));
+
+  app.get("/topups/:id", (c) => payingAgent(c, (service, principal) => service.get(principal.user, c.req.param("id"))));
 
   /** Signed one-hour link from gtm_results: the signature is the authorization. */
   app.get("/runs/:id/export.csv", async (c) => {

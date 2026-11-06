@@ -1,6 +1,6 @@
 import {
   BASE_CHAIN_ID, BASE_USDC, JAR_HAIRCUT_BPS, JAR_MAX_MICROS, NATIVE_TOKEN, TOPUP_MAX_MICROS, TOPUP_MICROS_PER_CREDIT, TOPUP_MIN_MICROS,
-  creditsForMicros, topupAuthorization,
+  creditsForMicros, parsePlanChoice, planPaymentCredits, planPriceMicros, topupAuthorization,
   type TopupAction, type TopupCreate, type TopupOptions, type TopupProof, type TopupRail, type TopupView,
 } from "@found/contracts";
 import type { ChainReader, ChainTx } from "../../payments/chain-reader.js";
@@ -14,6 +14,11 @@ const MAX_RECENT = 20;
 const RECENT_WINDOW_MS = 10 * 60_000;
 /** A bridge can deliver a little more than quoted; anything further off is someone else's payment. */
 const DELIVERY_OVER_TOLERANCE = 1.1;
+/** A plan must land at or above its price, so its quotes run tight and are sized to clear it by this much. */
+const PLAN_SLIPPAGE_PERCENT = 0.5;
+const PLAN_MARGIN_PER_MILLE = 1002n;
+/** One whole token of a very cheap coin is under Uniswap's minimum quote, so pricing retries with this many. */
+const PLAN_PROBE_RETRY = 10_000n;
 
 export class TopupError extends Error {
   constructor(readonly code: string, readonly status: 400 | 404 | 409 | 429 | 502 = 400) {
@@ -45,6 +50,10 @@ interface Payer {
   creditAccountId: string;
 }
 
+const creditsFor = (plan: string | null, micros: number) => {
+  const choice = parsePlanChoice(plan);
+  return choice ? planPaymentCredits(choice, micros) : creditsForMicros(micros);
+};
 const same = (a: string | null | undefined, b: string | null | undefined) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
 const afterHaircut = (micros: number) => Math.floor(micros * (10_000 - JAR_HAIRCUT_BPS) / 10_000);
 const erc20Transfer = (to: string, amount: string) =>
@@ -80,7 +89,11 @@ export class TopupService {
     return { chain_id: BASE_CHAIN_ID, address: jar.address, max_micros: JAR_MAX_MICROS, available_micros: Math.max(0, threshold - committed), haircut_bps: JAR_HAIRCUT_BPS };
   }
 
-  async create(user: Payer, input: TopupCreate): Promise<TopupView> {
+  /** `maxMicros` lowers the limit on one payment, for an agent spending its own wallet. */
+  async create(user: Payer, input: TopupCreate, { maxMicros = TOPUP_MAX_MICROS }: { maxMicros?: number } = {}): Promise<TopupView> {
+    const choice = input.plan === undefined ? null : parsePlanChoice(input.plan);
+    if (input.plan !== undefined && !choice) throw new TopupError("invalid_plan");
+    if (choice && input.rail === "jar") throw new TopupError("plan_not_for_jar");
     const now = this.deps.now();
     const wallet = input.wallet.toLowerCase();
     if (Math.abs(now - input.issued_at) > SIGNATURE_LIFETIME_MS) throw new TopupError("stale_wallet_signature");
@@ -95,29 +108,62 @@ export class TopupService {
 
     const rail = this.railFor(input);
     const base = {
-      id: this.deps.newId(), userId: user.id, accountId: user.creditAccountId, wallet, rail,
+      id: this.deps.newId(), userId: user.id, accountId: user.creditAccountId, wallet, rail, plan: input.plan ?? null,
       sourceChainId: input.chain_id, tokenIn: input.token.toLowerCase(), amountIn: input.amount,
       status: "open", createdAt: now, expiresAt: now + QUOTE_LIFETIME_MS,
       startBlock: await this.deps.chains.blockNumber(BASE_CHAIN_ID),
     };
 
     if (rail === "usdc") {
-      const micros = Number(input.amount);
-      this.assertLimits(micros);
-      const action = this.sendTx("Send USDC to GTMMAXING", { chainId: BASE_CHAIN_ID, to: BASE_USDC, data: erc20Transfer(this.treasury, input.amount), value: "0" });
-      await this.deps.store.insert({ ...base, phase: "paying", pendingAction: JSON.stringify(action), expectedMicros: micros, minimumMicros: micros });
+      const micros = choice ? planPriceMicros(choice) : Number(input.amount);
+      if (!choice) this.assertLimits(micros, maxMicros);
+      const action = this.sendTx("Send USDC to GTMMAXING", { chainId: BASE_CHAIN_ID, to: BASE_USDC, data: erc20Transfer(this.treasury, String(micros)), value: "0" });
+      await this.deps.store.insert({ ...base, amountIn: String(micros), phase: "paying", pendingAction: JSON.stringify(action), expectedMicros: micros, minimumMicros: micros });
       return this.viewOf(base.id);
     }
 
-    if (rail === "jar") return this.createJar(input, base);
+    if (rail === "jar") {
+      try {
+        return await this.createJar(input, base);
+      } catch (error) {
+        // `auto` promised a payment that goes through, so one that doesn't fit the jar becomes a swap.
+        if (input.rail !== "auto" || !(error instanceof TopupError) || !["jar_deposit_too_large", "jar_full"].includes(error.code)) throw error;
+      }
+    }
 
-    const quote = await this.quote({ swapper: wallet, recipient: this.treasury, amount: input.amount, tokenIn: input.token, tokenInChainId: input.chain_id, tokenOut: BASE_USDC, tokenOutChainId: BASE_CHAIN_ID });
+    const swap = { swapper: wallet, recipient: this.treasury, tokenIn: input.token, tokenInChainId: input.chain_id, tokenOut: BASE_USDC, tokenOutChainId: BASE_CHAIN_ID };
+    const sized = choice ? await this.sizePlanPayment(swap, input.amount, planPriceMicros(choice)) : { amount: input.amount, quote: await this.quote({ ...swap, amount: input.amount }) };
+    const quote = sized.quote;
     const expected = Number(quote.quote.output?.amount);
     const minimum = Number(quote.quote.output?.minimumAmount ?? expected);
-    this.assertLimits(expected);
-    await this.deps.store.insert({ ...base, routing: quote.routing, quoteJson: JSON.stringify(quote), phase: quote.routing === "CHAINED" ? "plan" : "approve", expectedMicros: expected, minimumMicros: minimum });
+    if (!choice) this.assertLimits(expected, maxMicros);
+    await this.deps.store.insert({ ...base, rail: "swap", amountIn: sized.amount, routing: quote.routing, quoteJson: JSON.stringify(quote), phase: quote.routing === "CHAINED" ? "plan" : "approve", expectedMicros: expected, minimumMicros: minimum });
     const stepped = await this.step((await this.deps.store.get(base.id))!, {});
     return this.view(stepped.row, stepped.action);
+  }
+
+  /**
+   * Uniswap only quotes an exact output on one chain, so a plan's payment is
+   * sized from exact-input quotes: price the token, scale to clear the plan's
+   * price at the worst delivery, then check. Anything over comes back as credits.
+   */
+  private async sizePlanPayment(swap: Omit<Parameters<UniswapApi["quote"]>[0], "amount">, probe: string, price: number) {
+    const at = (amount: bigint) => this.quote({ ...swap, amount: amount.toString(), slippageTolerance: PLAN_SLIPPAGE_PERCENT });
+    const worst = (quoted: Awaited<ReturnType<typeof at>>) => BigInt(quoted.quote.output?.minimumAmount ?? quoted.quote.output?.amount ?? "0");
+    let amount = BigInt(probe);
+    let quoted = await at(amount).catch(async (error: unknown) => {
+      if (!(error instanceof TopupError) || error.code !== "no_route") throw error;
+      amount *= PLAN_PROBE_RETRY;
+      return at(amount);
+    });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const delivered = worst(quoted);
+      if (delivered === 0n) break;
+      amount = amount * BigInt(price) * PLAN_MARGIN_PER_MILLE / (delivered * 1000n) + 1n;
+      quoted = await at(amount);
+      if (worst(quoted) >= BigInt(price)) return { amount: amount.toString(), quote: quoted };
+    }
+    throw new TopupError("no_route");
   }
 
   private railFor(input: TopupCreate): TopupRail {
@@ -126,6 +172,7 @@ export class TopupService {
       if (input.chain_id !== BASE_CHAIN_ID || !isJarToken(input.token)) throw new TopupError("token_not_accepted");
       return "jar";
     }
+    if (input.rail === "auto" && this.deps.jar && input.chain_id === BASE_CHAIN_ID && isJarToken(input.token)) return "jar";
     return input.chain_id === BASE_CHAIN_ID && same(input.token, BASE_USDC) ? "usdc" : "swap";
   }
 
@@ -321,14 +368,14 @@ export class TopupService {
     for (const delivery of deliveries) {
       const micros = Number(delivery.value);
       if (micros < row.minimumMicros || micros > ceiling || micros === jarPrice) continue;
-      const credited = await this.deps.store.credit(row.id, { credits: creditsForMicros(micros), micros, chainId: BASE_CHAIN_ID, txHash: delivery.txHash, logIndex: delivery.logIndex, at: this.deps.now() });
+      const credited = await this.deps.store.credit(row.id, { credits: creditsFor(row.plan, micros), micros, chainId: BASE_CHAIN_ID, txHash: delivery.txHash, logIndex: delivery.logIndex, at: this.deps.now() });
       if (credited) return { row: await reload() };
     }
     return this.waiting(row, "Waiting for the funds to arrive on Base");
   }
 
   private async creditOr(row: TopupRow, micros: number, chainId: number, txHash: string, logIndex: number, fail: Fail, reload: () => Promise<TopupRow>, jarNonce?: number): Promise<Stepped> {
-    const credited = await this.deps.store.credit(row.id, { credits: creditsForMicros(micros), micros, chainId, txHash, logIndex, at: this.deps.now(), ...(jarNonce === undefined ? {} : { jarNonce }) });
+    const credited = await this.deps.store.credit(row.id, { credits: creditsFor(row.plan, micros), micros, chainId, txHash, logIndex, at: this.deps.now(), ...(jarNonce === undefined ? {} : { jarNonce }) });
     return credited ? { row: await reload() } : fail("payment_already_used");
   }
 
@@ -350,9 +397,9 @@ export class TopupService {
     }
   }
 
-  private assertLimits(micros: number) {
+  private assertLimits(micros: number, maxMicros: number) {
     if (!Number.isFinite(micros) || micros < TOPUP_MIN_MICROS) throw new TopupError("amount_too_small");
-    if (micros > TOPUP_MAX_MICROS) throw new TopupError("amount_too_large");
+    if (micros > maxMicros) throw new TopupError("amount_too_large");
   }
 
   private async owned(user: Payer, id: string): Promise<TopupRow> {
@@ -371,9 +418,11 @@ export class TopupService {
       id: row.id,
       rail: row.rail as TopupRail,
       routing: row.routing,
+      plan: row.plan,
+      amount_in: row.amountIn,
       status: row.status as TopupView["status"],
-      estimated_credits: creditsForMicros(row.expectedMicros),
-      minimum_credits: creditsForMicros(row.minimumMicros),
+      estimated_credits: creditsFor(row.plan, row.expectedMicros),
+      minimum_credits: creditsFor(row.plan, row.minimumMicros),
       credits: row.credits,
       settlement_tx: row.settledTx,
       action: row.status === "open" ? (action ?? pending ?? { kind: "wait", label: "Checking the payment" }) : { kind: "none" },

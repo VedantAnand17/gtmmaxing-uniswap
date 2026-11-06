@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { periodCredits, planById, type Billing, type CreditPlan } from "./plans.js";
 
 /**
  * Credit top-ups paid from a crypto wallet. Money settles as USDC on Base, by
@@ -17,8 +18,34 @@ export const TOPUP_MAX_MICROS = 500_000_000;
 /** Share of a jar deposit kept back: it pays the searcher who clears the jar and the price risk until then. */
 export const JAR_HAIRCUT_BPS = 500;
 export const JAR_MAX_MICROS = 2_000_000;
+/** The most an agent's wallet may spend on one top-up. */
+export const AGENT_TOPUP_MAX_MICROS = 50_000_000;
 
 export const creditsForMicros = (micros: number) => Math.floor(micros / TOPUP_MICROS_PER_CREDIT);
+
+export interface PlanChoice {
+  plan: CreditPlan;
+  billing: Billing;
+}
+
+/** Reads `growth-annual` into a plan and its billing period. */
+export function parsePlanChoice(value: string | null | undefined): PlanChoice | null {
+  const [id, billing] = (value ?? "").split("-");
+  const plan = planById(id ?? "");
+  return plan && (billing === "monthly" || billing === "annual") ? { plan, billing } : null;
+}
+
+export const planPriceMicros = ({ plan, billing }: PlanChoice) => plan.prices[billing].usd * 1_000_000;
+
+/**
+ * Credits for a wallet payment toward a plan: the plan's credits, plus anything
+ * paid above its price at the top-up rate, since a swap rarely lands exactly.
+ * Paying less than the price buys only what was paid for.
+ */
+export function planPaymentCredits(choice: PlanChoice, micros: number): number {
+  const price = planPriceMicros(choice);
+  return micros >= price ? periodCredits(choice.plan, choice.billing) + creditsForMicros(micros - price) : creditsForMicros(micros);
+}
 
 /** What the wallet signs so a transfer from it can credit this account, and only this account. */
 export function topupAuthorization(input: { account: string; wallet: string; issuedAt: number }): string {
@@ -52,7 +79,10 @@ export const topupCreateSchema = z.object({
   chain_id: z.number().int().positive(),
   token: address,
   amount: z.string().regex(/^[1-9][0-9]{0,77}$/),
-  rail: topupRailSchema.optional(),
+  /** `auto` uses the jar when the payment fits it, and a swap otherwise. */
+  rail: z.enum(["usdc", "swap", "jar", "auto"]).optional(),
+  /** A plan such as `growth-annual`. The server sizes the payment, so `amount` only prices the token: send one whole unit. */
+  plan: z.string().max(40).optional(),
 });
 export type TopupCreate = z.infer<typeof topupCreateSchema>;
 
@@ -74,6 +104,10 @@ export const topupViewSchema = z.object({
   id: z.string(),
   rail: topupRailSchema,
   routing: z.string().nullable(),
+  /** The plan being bought, such as `growth-annual`; null for a plain top-up. */
+  plan: z.string().nullable(),
+  /** What the wallet pays, in the token's smallest unit. */
+  amount_in: z.string(),
   status: z.enum(["open", "credited", "failed", "expired"]),
   estimated_credits: z.number().int(),
   minimum_credits: z.number().int(),
@@ -84,3 +118,6 @@ export const topupViewSchema = z.object({
 });
 export type TopupView = z.infer<typeof topupViewSchema>;
 export const topupResponseSchema = z.object({ topup: topupViewSchema });
+
+/** GET /v1/agent/topups/options: the wallet options, plus what this agent signs and whether its owner allows it. */
+export const agentTopupOptionsSchema = topupOptionsSchema.extend({ allowed: z.boolean(), account: z.string(), max_micros_per_payment: z.number().int() });

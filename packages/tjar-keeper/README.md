@@ -14,4 +14,4 @@ JAR=0x.. UNISWAP_API_KEY=.. KEEPER_KEY=0x.. node src/cli.ts --execute --swap
 
 It checks the jar's balance of the native token, the common Base tokens and anything in `ASSETS`, and values each at the Uniswap API's guaranteed output.
 It names the most valuable assets up to `maxReleaseLength`, skips any not worth their own gas, and clears only when they beat `releaseCost` plus gas and `MARGIN`.
-The decision is the pure function in `src/decide.ts`; `src/cli.ts` is the chain and API plumbing.
+The decision is the pure function in `src/decide.ts`; `src/keeper.ts` is the chain and API plumbing and `src/cli.ts` the command line.

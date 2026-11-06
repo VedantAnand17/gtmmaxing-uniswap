@@ -14,6 +14,19 @@ The feature is off until `UNISWAP_API_KEY` and `TOPUP_TREASURY` are set; with th
 
 Credits are `floor(USDC received / 0.015)`, the Starter plan's rate.
 
+## Who buys what
+
+| Buyer | What | Route |
+| --- | --- | --- |
+| A person on the pricing page | A plan for one billing period (`/topup/?plan=growth-annual`), same credits as the card price, no renewal | Swap or bridge to USDC |
+| A person on `/topup/` | Any amount of credits | Swap or bridge, or the jar if they opt in |
+| An agent its owner allows | Up to $50 of credits per payment, from its own wallet (`/v1/agent/topups`) | `rail: auto` picks the jar when the payment fits, otherwise a swap |
+
+Plans never go through the jar: a jar sells everything inside it for one fixed price, so a $30 plan in a $2 jar could be taken for $2.
+Uniswap only quotes an exact output on one chain, so `sizePlanPayment` prices the token and sizes the payment to clear the plan's price at the worst delivery; anything over is credited at the top-up rate.
+An agent's permission is `allow_topup`, off by default, on its Usage card.
+A refusal for `insufficient_credits` tells an allowed agent where to buy (`top_up`), and prices and ways to pay are public at `/pricing.json`.
+
 ## How a credit is earned
 
 The server decides every wallet action (`TopupService.advance`), so the page cannot redirect a payment.
@@ -52,7 +65,9 @@ cast send 0xfAc70EEEE259F2140CBbB8e3157b75A52ce39fee \
   --rpc-url https://mainnet.base.org
 ```
 
-Run the keeper as a dry run first: `JAR=.. UNISWAP_API_KEY=.. pnpm --filter @found/tjar-keeper keeper`.
+The hourly job clears the jar when it pays to, once the `TOPUP_KEEPER_KEY` secret holds the key of a wallet with the threshold in USDC and a little ETH on Base.
+It swaps what it takes back to USDC, so the float refills, and anyone else can still clear the jar first.
+Run the keeper by hand as a dry run first: `JAR=.. UNISWAP_API_KEY=.. pnpm --filter @found/tjar-keeper keeper`.
 It checks common Base tokens; pass any others in `ASSETS`.
 Add `KEEPER_KEY` and `--execute`, and optionally `--swap` to turn the released assets back into USDC.
 
