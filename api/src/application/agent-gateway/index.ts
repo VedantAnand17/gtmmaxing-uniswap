@@ -69,6 +69,8 @@ export interface CallContext {
 }
 
 export interface AgentGatewayDeps {
+  /** Where an account out of credits can add them, when that is offered. */
+  topUpLink?: (shortfallCredits: number) => string;
   runs: AgentRunStore;
   credits: CreditsService;
   tools: ToolLauncher;
@@ -203,7 +205,10 @@ export class AgentGateway {
     if (!cacheOnly && (plan.named?.deferredQuote || plan.steps.some((step) => step.kind === "lookup")) && this.deps.lookups.ready && !(await this.deps.lookups.ready())) {
       return refused({ reason: "temporarily_unavailable", summary: "Nothing was sent: email lookups are temporarily unavailable on our side, so nothing was charged; try again later.", quote }, balance);
     }
-    if (!cacheOnly && balance < quote) return refused({ reason: "insufficient_credits", summary: `Nothing was sent: this needs up to ${credits(quote)} and you have ${balance}.`, quote, next: { tool: "gtm_account", args: {} } }, balance);
+    if (!cacheOnly && balance < quote) {
+      const topUp = this.deps.topUpLink?.(quote - balance);
+      return refused({ reason: "insufficient_credits", summary: `Nothing was sent: this needs up to ${credits(quote)} and you have ${balance}${topUp ? ", so ask the account owner to add credits at the link and repeat this call" : ""}.`, quote, next: { tool: "gtm_account", args: {} }, ...(topUp ? { link: topUp } : {}) }, balance);
+    }
     // 4. The agent's own cap, enforced atomically with creating the run.
     const admitted = await this.runs.admit({
       accountId: principal.user.creditAccountId,
@@ -750,6 +755,7 @@ function refused(refusal: Refusal, balance: number): AgentAnswer {
     status: "refused", reason: refusal.reason, summary: refusal.summary, cost: 0, balance,
     ...(refusal.quote !== undefined ? { quote: refusal.quote } : {}),
     ...(refusal.fields ? { fields: refusal.fields } : {}),
+    ...(refusal.link ? { link: refusal.link } : {}),
     next: refusal.next ?? { tool: "gtm_account", args: {} },
   });
 }

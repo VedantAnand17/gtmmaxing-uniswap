@@ -77,7 +77,7 @@ export interface AgentPlan {
   named?: { tenantId: string; resolved: boolean; deferredQuote: number; companyOf?: Record<string, string> };
 }
 
-export interface Refusal { reason: string; summary: string; fields?: string[]; quote?: number; next?: AgentNext }
+export interface Refusal { reason: string; summary: string; fields?: string[]; quote?: number; link?: string; next?: AgentNext }
 export interface CommonArgs { maxCredits?: number | undefined; idempotencyKey?: string | undefined; dryRun: boolean }
 export type Planned = { ok: true; plan: AgentPlan; common: CommonArgs; canonical: unknown } | { ok: false; refusal: Refusal };
 
