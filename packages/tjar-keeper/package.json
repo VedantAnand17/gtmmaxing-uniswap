@@ -1,0 +1,25 @@
+{
+  "name": "@found/tjar-keeper",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Finds, prices and clears a Uniswap Token Jar when it is profitable, using the Uniswap API.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "keeper": "node src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src test",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "viem": "^2.56.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.46.4",
+    "@typescript-eslint/parser": "^8.46.4",
+    "eslint": "^9.39.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}
