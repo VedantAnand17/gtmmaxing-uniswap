@@ -10,7 +10,8 @@ export function UsagePage({ session }: { session: Session }) {
       <div className="mb-8">
         <h1 className="workspace-activity-title">Usage</h1>
         <p className="workspace-activity-description">
-          A clear view of your free credits and lookup activity.
+          A clear view of your free credits and lookup activity.{" "}
+          <a href="/topup/">Add credits</a>
         </p>
       </div>
 

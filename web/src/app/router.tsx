@@ -7,6 +7,7 @@ import { AddToAgentPage } from "../features/agents/AddToAgentPage";
 import { ApiKeysPage } from "../features/agents/ApiKeysPage";
 import { ConnectPage } from "../features/agents/ConnectPage";
 import { ApprovePage } from "../features/agents/ApprovePage";
+import { TopupPage } from "../features/topup/TopupPage";
 
 const rootRoute = createRootRoute({ component: AppShell });
 const indexRoute = createRoute({
@@ -42,6 +43,12 @@ const approveRoute = createRoute({
   path: "/approve",
   component: ApprovePage,
 });
+/** Wallet top-ups; an agent out of credits links its owner here. */
+const topupRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/topup",
+  component: TopupPage,
+});
 const addToAgentRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/add-to-agent",
@@ -56,6 +63,6 @@ function FeatureRoute() {
   return feature === "api-keys" ? <ApiKeysPage key={feature} /> : <FeatureWaitlistPage key={feature} featureSlug={feature} />;
 }
 
-const routeTree = rootRoute.addChildren([indexRoute, historyRoute, usageRoute, featureRoute, connectRoute, approveRoute, addToAgentRoute]);
+const routeTree = rootRoute.addChildren([indexRoute, historyRoute, usageRoute, featureRoute, connectRoute, approveRoute, topupRoute, addToAgentRoute]);
 
 export const router = createRouter({ routeTree, defaultOnCatch: (error) => reportBrowserError("render", error) });

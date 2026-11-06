@@ -277,7 +277,8 @@ function NoticeStrip({
         You&apos;re out of credits - this run needs up to {notice.needed}{" "}
         fresh {notice.needed === 1 ? "credit" : "credits"}, you have{" "}
         {notice.remaining}. Repeats are free - nothing ran, nothing was
-        debited.
+        debited.{" "}
+        <a href={`/topup/?credits=${Math.max(1, notice.needed - notice.remaining)}`}>Add credits</a>
       </span>
     </div>
   );
