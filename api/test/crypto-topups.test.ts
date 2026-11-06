@@ -498,8 +498,11 @@ describe("wallet top-ups", () => {
       const before = await call();
       expect(before).toMatchObject({ reason: "insufficient_credits", link: "https://gtmmaxing.com/topup/?credits=1" });
       expect(before).not.toHaveProperty("top_up");
+      expect(before.summary).toMatch(/add credits at the link\.$/);
       await allow(s);
-      expect((await call()).top_up).toMatchObject({ url: expect.stringContaining("/v1/agent/topups") as string, credits: 1 });
+      const allowed = await call();
+      expect(allowed.top_up).toMatchObject({ url: expect.stringContaining("/v1/agent/topups") as string, credits: 1 });
+      expect(allowed.summary).toMatch(/ask the owner\.$/);
     });
   });
 

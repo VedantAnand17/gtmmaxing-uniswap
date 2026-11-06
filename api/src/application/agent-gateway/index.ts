@@ -211,7 +211,7 @@ export class AgentGateway {
       const shortfall = quote - balance;
       const topUp = this.deps.topUpLink?.(shortfall);
       const buyOwn = Boolean(this.deps.canTopUp && principal.agent.allowTopup && ctx.baseUrl);
-      const ask = buyOwn ? ", so buy credits from your wallet at top_up, or ask the owner" : topUp ? ", so ask the account owner to add credits at the link and repeat this call" : "";
+      const ask = buyOwn ? "; buy them at top_up or ask the owner" : topUp ? "; ask the owner to add credits at the link" : "";
       return refused({ reason: "insufficient_credits", summary: `Nothing was sent: this needs up to ${credits(quote)} and you have ${balance}${ask}.`, quote, next: { tool: "gtm_account", args: {} }, ...(topUp ? { link: topUp } : {}), ...(buyOwn ? { top_up: { url: `${ctx.baseUrl}/v1/agent/topups`, credits: shortfall } } : {}) }, balance);
     }
     // 4. The agent's own cap, enforced atomically with creating the run.
