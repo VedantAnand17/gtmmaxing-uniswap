@@ -52,6 +52,7 @@ cast send 0xfAc70EEEE259F2140CBbB8e3157b75A52ce39fee \
 ```
 
 Run the keeper as a dry run first: `JAR=.. UNISWAP_API_KEY=.. pnpm --filter @found/tjar-keeper keeper`.
+It checks common Base tokens; pass any others in `ASSETS`.
 Add `KEEPER_KEY` and `--execute`, and optionally `--swap` to turn the released assets back into USDC.
 
 Smart-contract wallets are not supported yet, because the wallet signature is checked as an ordinary account signature.

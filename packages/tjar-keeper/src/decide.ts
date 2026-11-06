@@ -44,7 +44,8 @@ export function decide(assets: PricedAsset[], terms: Terms, gas: { base: bigint;
   return { release: true, assets: candidates.map((asset) => asset.address), value, profit, reason: "profitable" };
 }
 
-/** Every token that has ever entered the jar, from its transfer logs. A jar keeps no list of its own. */
-export function assetsFromLogs(logs: { address: string }[]): string[] {
-  return [...new Set(logs.map((log) => log.address.toLowerCase()))];
+/** The native token, the usual suspects, and any extras named by the operator, each once. */
+export function candidateAssets(native: string, common: string[], extra = ""): string[] {
+  const named = extra.split(",").map((asset) => asset.trim()).filter(Boolean);
+  return [...new Set([native, ...common, ...named].map((asset) => asset.toLowerCase()))];
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assetsFromLogs, decide, type PricedAsset } from "../src/decide.ts";
+import { candidateAssets, decide, type PricedAsset } from "../src/decide.ts";
 
 const asset = (address: string, value: bigint, extra: Partial<PricedAsset> = {}): PricedAsset => ({ address, balance: 1n, value, ...extra });
 const GAS = { base: 10n, perAsset: 5n };
@@ -29,8 +29,9 @@ describe("decide", () => {
   });
 });
 
-describe("assetsFromLogs", () => {
-  it("lists each token once, whatever its address casing", () => {
-    expect(assetsFromLogs([{ address: "0xAB" }, { address: "0xab" }, { address: "0xcd" }])).toEqual(["0xab", "0xcd"]);
+describe("candidateAssets", () => {
+  it("lists each token once, whatever its casing, with the operator's extras", () => {
+    expect(candidateAssets("0x0", ["0xAB"], "0xab, 0xCD")).toEqual(["0x0", "0xab", "0xcd"]);
+    expect(candidateAssets("0x0", ["0xAB"])).toEqual(["0x0", "0xab"]);
   });
 });

@@ -1,20 +1,29 @@
 #!/usr/bin/env node
 /**
- * Clears a Uniswap Token Jar when it pays to: scans the jar's history for its
- * assets, prices them with the Uniswap API, and calls release(). Then it can
- * swap what it took back into the resource token. Dry run unless --execute.
+ * Clears a Uniswap Token Jar when it pays to: checks the jar's balance of its
+ * candidate assets, prices them with the Uniswap API, and calls release(). Then
+ * it can swap what it took back into the resource token. Dry run unless --execute.
  *
- *   JAR=0x.. RPC_URL=.. UNISWAP_API_KEY=.. [KEEPER_KEY=0x..] [FROM_BLOCK=..] [MARGIN=..]
+ *   JAR=0x.. UNISWAP_API_KEY=.. [RPC_URL=..] [KEEPER_KEY=0x..] [ASSETS=0x..,0x..] [MARGIN=..]
  *     node src/cli.ts [--execute] [--swap]
  */
-import { createPublicClient, createWalletClient, http, parseAbi, parseAbiItem, zeroAddress, type Address, type Hex } from "viem";
+import { createPublicClient, createWalletClient, http, parseAbi, zeroAddress, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base } from "viem/chains";
-import { assetsFromLogs, decide, type PricedAsset } from "./decide.ts";
+import { candidateAssets, decide, type PricedAsset } from "./decide.ts";
 
 const API = "https://trade-api.gateway.uniswap.org/v1";
 const NATIVE = zeroAddress;
-const LOG_CHUNK = 5_000n;
+const DEFAULT_RPC = "https://base-rpc.publicnode.com";
+/** A jar lists nothing, and free RPCs refuse to search logs across all tokens, so check the liquid Base tokens. */
+const COMMON_ASSETS = [
+  "0x4200000000000000000000000000000000000006", // WETH
+  "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // USDC
+  "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf", // cbBTC
+  "0x940181a94A35A4569E4529A3CDfB74e38FD98631", // AERO
+  "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2", // USDT
+  "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb", // DAI
+];
 const RELEASED_GAS = { base: 120_000n, perAsset: 45_000n };
 
 const env = (name: string): string => {
@@ -25,7 +34,7 @@ const env = (name: string): string => {
 const execute = process.argv.includes("--execute");
 const swapAfter = process.argv.includes("--swap");
 const jar = env("JAR") as Address;
-const rpc = createPublicClient({ chain: base, transport: http(process.env.RPC_URL) });
+const rpc = createPublicClient({ chain: base, transport: http(process.env.RPC_URL ?? DEFAULT_RPC) });
 const apiKey = env("UNISWAP_API_KEY");
 
 const ABI = parseAbi([
@@ -39,7 +48,6 @@ const ABI = parseAbi([
   "function allowance(address,address) view returns (uint256)",
   "function approve(address,uint256) returns (bool)",
 ]);
-const TRANSFER = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)");
 
 async function api<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(`${API}${path}`, { method: "POST", headers: { "content-type": "application/json", "x-api-key": apiKey }, body: JSON.stringify(body) });
@@ -52,16 +60,6 @@ const quoteTo = (tokenIn: string, resource: Address, amount: bigint, swapper: st
   api<{ quote: { output: { amount: string; minimumAmount?: string }; gasPrice?: string }; permitData?: unknown }>("/quote", {
     type: "EXACT_INPUT", amount: amount.toString(), tokenIn, tokenOut: resource, tokenInChainId: base.id, tokenOutChainId: base.id, swapper, protocols: ["V2", "V3", "V4"],
   });
-
-async function findAssets(fromBlock: bigint): Promise<string[]> {
-  const head = await rpc.getBlockNumber();
-  const logs: { address: string }[] = [];
-  for (let start = fromBlock; start <= head; start += LOG_CHUNK) {
-    const toBlock = start + LOG_CHUNK - 1n < head ? start + LOG_CHUNK - 1n : head;
-    logs.push(...await rpc.getLogs({ event: TRANSFER, args: { to: jar }, fromBlock: start, toBlock }));
-  }
-  return [NATIVE, ...assetsFromLogs(logs)];
-}
 
 async function price(asset: string, resource: Address, swapper: string): Promise<PricedAsset> {
   const code = asset === NATIVE ? "0x1" : await rpc.getCode({ address: asset as Address });
@@ -93,7 +91,7 @@ async function main() {
     rpc.readContract({ address: releaser, abi: ABI, functionName: "resource" }),
     rpc.readContract({ address: releaser, abi: ABI, functionName: "maxReleaseLength" }),
   ]);
-  const assets = await findAssets(BigInt(process.env.FROM_BLOCK ?? (await rpc.getBlockNumber()) - 200_000n));
+  const assets = candidateAssets(NATIVE, COMMON_ASSETS, process.env.ASSETS);
   const priced = await Promise.all(assets.map((asset) => price(asset, resource, swapper)));
 
   // Gas in resource terms: price this chain's gas through the same API.
@@ -105,7 +103,7 @@ async function main() {
   console.log(JSON.stringify({ jar, releaser, nonce: nonce.toString(), cost: total.toString(), resource, assets: priced.map((a) => ({ address: a.address, balance: a.balance.toString(), value: a.value.toString() })), decision: { ...decision, value: decision.value.toString(), profit: decision.profit.toString() } }, null, 2));
   if (!decision.release || !execute) return;
 
-  const wallet = createWalletClient({ account: account!, chain: base, transport: http(process.env.RPC_URL) });
+  const wallet = createWalletClient({ account: account!, chain: base, transport: http(process.env.RPC_URL ?? DEFAULT_RPC) });
   const allowance = await rpc.readContract({ address: resource, abi: ABI, functionName: "allowance", args: [account!.address, releaser] });
   if (allowance < total) {
     const approve = await wallet.writeContract({ address: resource, abi: ABI, functionName: "approve", args: [releaser, total] });

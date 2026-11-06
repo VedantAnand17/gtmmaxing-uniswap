@@ -4,7 +4,8 @@ import { BASE_USDC, NATIVE_TOKEN, topupAuthorization } from "@found/contracts";
 import { createRuntime, type Runtime } from "../src/runtime.js";
 import { CREDIT_ATOMIC } from "../src/domain/credits.js";
 import { walletTypedData } from "../src/application/topups/index.js";
-import type { ChainReader, ChainTx, UsdcDelivery } from "../src/payments/chain-reader.js";
+import { TOPUP_CHAINS } from "../src/application/topups/catalog.js";
+import { DEFAULT_RPC_URLS, type ChainReader, type ChainTx, type UsdcDelivery } from "../src/payments/chain-reader.js";
 import type { UniswapApi, UniswapPlan, UniswapQuoteInput } from "../src/payments/uniswap.js";
 import { createTestDb, SESSION_SECRET, signIn } from "./helpers.js";
 
@@ -82,6 +83,13 @@ const create = async (s: Setup, input: Record<string, unknown>, signer = account
 const next = (s: Setup, id: string, proof: Record<string, unknown> = {}) => post(s.runtime, s.headers, `/topups/${id}/next`, proof);
 const balance = async (s: Setup) => (await s.runtime.deps.credits.balance(s.user.creditAccountId)) / CREDIT_ATOMIC;
 const FREE = 10;
+
+describe("chain access", () => {
+  it("has a working endpoint for every chain the page offers, and avoids the Base one that refuses log searches", () => {
+    for (const chain of TOPUP_CHAINS) expect(DEFAULT_RPC_URLS[chain.id], chain.name).toMatch(/^https:/);
+    expect(DEFAULT_RPC_URLS[8453]).not.toContain("mainnet.base.org");
+  });
+});
 
 describe("walletTypedData", () => {
   it("turns the Uniswap API's permit shape into one a wallet can really sign", async () => {

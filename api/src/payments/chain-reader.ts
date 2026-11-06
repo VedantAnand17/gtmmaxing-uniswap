@@ -36,6 +36,22 @@ export interface ChainReader {
   releaser(address: string): Promise<{ nonce: number; threshold: number }>;
 }
 
+/**
+ * viem's defaults are not usable here: mainnet.base.org answers every
+ * eth_getLogs with "request limit reached", and that search is how a bridge
+ * delivery is found. Override with TOPUP_RPC_URLS.
+ */
+export const DEFAULT_RPC_URLS: Record<number, string> = {
+  1: "https://ethereum-rpc.publicnode.com",
+  10: "https://optimism-rpc.publicnode.com",
+  56: "https://bsc-rpc.publicnode.com",
+  130: "https://unichain-rpc.publicnode.com",
+  137: "https://polygon-bor-rpc.publicnode.com",
+  8453: "https://base-rpc.publicnode.com",
+  42161: "https://arbitrum-one-rpc.publicnode.com",
+  43114: "https://avalanche-c-chain-rpc.publicnode.com",
+};
+
 const CONFIRMATIONS = 3n;
 /** Keeps one `eth_getLogs` inside what public RPCs serve; about two hours on Base. */
 const MAX_LOG_RANGE = 3_600n;
@@ -50,7 +66,7 @@ export function createChainReader(rpcOverrides: Record<string, string> = {}): Ch
         const [{ createPublicClient, http }, chains] = await Promise.all([import("viem"), import("viem/chains")]);
         const chain = Object.values(chains).find((candidate) => (candidate as { id?: number }).id === chainId);
         if (!chain) throw new Error(`unsupported chain ${chainId}`);
-        return createPublicClient({ chain: chain as never, transport: http(rpcOverrides[String(chainId)]) }) as unknown as PublicClient;
+        return createPublicClient({ chain: chain as never, transport: http(rpcOverrides[String(chainId)] ?? DEFAULT_RPC_URLS[chainId]) }) as unknown as PublicClient;
       })();
       clients.set(chainId, existing);
     }

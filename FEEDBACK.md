@@ -54,7 +54,14 @@ We did not test a bridge approval without it, but the public spec gives no other
 The Trading API supports Base Sepolia, while the TJAR deployment list has mainnets only.
 Our keeper's first real run therefore has to use mainnet funds.
 
-### 7. A fixed clearing price needs guardrails for anyone crediting deposits
+### 7. Finding a jar's assets as documented needs a paid RPC
+
+The searcher guide says to build the asset list from `Transfer` logs into the jar.
+That query has no token address, and on 2026-11-06 the free Base endpoints we tried all refused it: `mainnet.base.org` ("request limit reached"), publicnode ("Please specify an address") and drpc (range limits).
+A small jar will not attract a searcher who pays for indexing, so our keeper checks balances of common tokens instead and can miss an unusual one.
+**Suggestion:** a public jar-contents endpoint in the Uniswap API, since the TJAR Dashboard must compute this already.
+
+### 8. A fixed clearing price needs guardrails for anyone crediting deposits
 
 The docs discuss overshoot as lost value.
 For a merchant who credits customers on deposit, it is an exploit: deposit 100, get credit for 100, then clear the jar yourself for a threshold of 25 and take your 100 back.
