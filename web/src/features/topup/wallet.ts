@@ -45,6 +45,21 @@ export async function useChain(chainId: number): Promise<void> {
   }
 }
 
+/** Switches to a network the wallet may not know yet, adding it first when it says so (EIP-3085). */
+export async function addChain(chain: { chainId: number; name: string; rpcUrl: string; explorerUrl: string; currency: { name: string; symbol: string; decimals: number } }): Promise<void> {
+  try {
+    await provider().request({ method: "wallet_switchEthereumChain", params: [{ chainId: hexChain(chain.chainId) }] });
+    return;
+  } catch (error) {
+    if (error instanceof WalletError) throw error;
+    const code = (error as { code?: number }).code;
+    if (code === 4001) throw new WalletError("rejected");
+    if (code !== 4902) throw new WalletError("wrong_chain");
+  }
+  await ask("wallet_addEthereumChain", [{ chainId: hexChain(chain.chainId), chainName: chain.name, rpcUrls: [chain.rpcUrl], blockExplorerUrls: [chain.explorerUrl], nativeCurrency: chain.currency }]);
+  await useChain(chain.chainId);
+}
+
 /** The signature that lets a transfer from this wallet credit this account. */
 export async function authorizeWallet(account: string, wallet: string): Promise<{ signature: string; issued_at: number }> {
   const issued_at = Date.now();
